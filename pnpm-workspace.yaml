@@ -1,0 +1,10 @@
+ignoredBuiltDependencies:
+  - '@prisma/client'
+  - '@prisma/engines'
+  - esbuild
+  - prisma
+  - sqlite3
+
+packages:
+  - 'ws-server'
+  - 'app'
