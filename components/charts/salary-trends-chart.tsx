@@ -4,6 +4,7 @@ import { useState } from "react"
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts"
 import { format, parse } from "date-fns"
 import useSWR from 'swr'
+import { useCurrency } from "@/components/providers/currency-provider"
 
 const cities = ["All", "Jakarta", "Bandung", "Surabaya"];
 const statuses = ["All", "Active", "Inactive"];
@@ -11,6 +12,7 @@ const statuses = ["All", "Active", "Inactive"];
 const fetcher = (url: string) => fetch(url).then(res => res.json());
 
 export function SalaryTrendsChart() {
+  const { formatAmount } = useCurrency();
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>(() => {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
@@ -104,7 +106,15 @@ export function SalaryTrendsChart() {
                 return period;
               }}
             />
-            <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
+            <YAxis
+              stroke="#888888"
+              fontSize={12}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(value) =>
+                typeof value === "number" ? formatAmount(value) : value
+              }
+            />
             <Tooltip
               formatter={(value, name) => [
                 typeof value === "number" ? `$${value.toLocaleString()}` : value,

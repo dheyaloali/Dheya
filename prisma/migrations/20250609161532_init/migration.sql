@@ -280,6 +280,20 @@ CREATE TABLE "Notification" (
 );
 
 -- CreateTable
+CREATE TABLE "DeviceToken" (
+    "id" SERIAL NOT NULL,
+    "token" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "employeeId" INTEGER,
+    "platform" TEXT NOT NULL DEFAULT 'unknown',
+    "tokenType" TEXT NOT NULL DEFAULT 'fcm',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "lastSeen" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "DeviceToken_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "Settings" (
     "id" SERIAL NOT NULL,
     "adminRealtimeEnabled" BOOLEAN NOT NULL DEFAULT true,
@@ -393,6 +407,15 @@ CREATE INDEX "Notification_employeeId_idx" ON "Notification"("employeeId");
 -- CreateIndex
 CREATE INDEX "Notification_userId_idx" ON "Notification"("userId");
 
+-- CreateIndex
+CREATE UNIQUE INDEX "DeviceToken_token_key" ON "DeviceToken"("token");
+
+-- CreateIndex
+CREATE INDEX "DeviceToken_userId_idx" ON "DeviceToken"("userId");
+
+-- CreateIndex
+CREATE INDEX "DeviceToken_employeeId_idx" ON "DeviceToken"("employeeId");
+
 -- AddForeignKey
 ALTER TABLE "Employee" ADD CONSTRAINT "Employee_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
@@ -464,3 +487,9 @@ ALTER TABLE "Notification" ADD CONSTRAINT "Notification_employeeId_fkey" FOREIGN
 
 -- AddForeignKey
 ALTER TABLE "Notification" ADD CONSTRAINT "Notification_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "DeviceToken" ADD CONSTRAINT "DeviceToken_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "DeviceToken" ADD CONSTRAINT "DeviceToken_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE SET NULL ON UPDATE CASCADE;

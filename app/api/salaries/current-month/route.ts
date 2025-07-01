@@ -2,20 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/auth-guard";
 
-export async function GET(req: NextRequest) {
-  console.log("Current-month salaries API endpoint called");
+export async function GET(req: import('next/server').NextRequest) {
   try {
     const auth = await requireAuth(req, true);
     
-    // Debug auth response
-    console.log("Auth check result:", {
-      ok: auth.ok,
-      status: auth.status,
-      message: auth.message
-    });
-    
     if (!auth.ok) {
-      console.error("Authentication failed:", auth.message, "Status:", auth.status);
       return NextResponse.json({ error: auth.message }, { status: auth.status });
     }
 
@@ -25,8 +16,6 @@ export async function GET(req: NextRequest) {
     const skip = (page - 1) * pageSize;
     const take = pageSize;
 
-    console.log("Fetching current month salaries with params:", { page, pageSize, skip, take });
-
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
@@ -35,8 +24,6 @@ export async function GET(req: NextRequest) {
     const employees = await prisma.employee.findMany({
       include: { user: true },
     });
-
-    console.log(`Found ${employees.length} employees`);
 
     if (!employees || employees.length === 0) {
       return NextResponse.json({ error: "No employees found" }, { status: 404 });
@@ -90,10 +77,10 @@ export async function GET(req: NextRequest) {
     const paginatedSalaries = currentMonthSalaries.slice(skip, skip + take);
 
     // --- Calculate summary statistics for the WHOLE month (not just the page) ---
-    const totalAmount = currentMonthSalaries.reduce((sum, s) => sum + (s.amount || 0), 0);
+    const totalAmount = currentMonthSalaries.reduce((sum: number, s: any) => sum + s.amount, 0);
     const averageSalary = currentMonthSalaries.length > 0 ? totalAmount / currentMonthSalaries.length : 0;
     const highestSalary = Math.max(...currentMonthSalaries.map(s => s.amount || 0), 0);
-    const statusCounts = currentMonthSalaries.reduce((acc, s) => {
+    const statusCounts = currentMonthSalaries.reduce((acc: Record<string, number>, s: any) => {
       acc[s.status] = (acc[s.status] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
@@ -118,7 +105,6 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(summary);
   } catch (error) {
-    console.error('Error in current-month salaries API:', error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'An unexpected error occurred' },
       { status: 500 }

@@ -1,0 +1,48 @@
+﻿// Define supported locales
+export const locales = ['en', 'id'];
+
+// Set default locale
+export const defaultLocale = 'en';
+
+// Define timeZone for date formatting
+export const timeZone = 'UTC';
+
+// Define formats for date, time and number formatting
+export const formats = {
+  dateTime: {
+    short: {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    },
+    medium: {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric'
+    }
+  },
+  number: {
+    precise: {
+      maximumFractionDigits: 2
+    },
+    compact: {
+      notation: 'compact'
+    },
+    currency: {
+      style: 'currency',
+      currency: 'USD'
+    }
+  }
+};
+
+// Export the complete configuration
+const config = {
+  locales,
+  defaultLocale,
+  timeZone,
+  formats
+};
+
+export default config;

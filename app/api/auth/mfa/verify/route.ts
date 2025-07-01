@@ -22,12 +22,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'User not found, not admin, or MFA not set up.' }, { status: 403 });
   }
 
-  // Verify the TOTP code
+  // Verify the TOTP code with increased window tolerance
   const verified = speakeasy.totp.verify({
     secret: user.mfaSecret,
     encoding: 'base32',
     token,
-    window: 1, // allow 1 step before/after
+    window: 2, // allow 2 steps before/after (more tolerance)
   });
   console.log('MFA VERIFY RESULT:', verified);
 

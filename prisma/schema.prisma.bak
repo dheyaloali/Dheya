@@ -1,0 +1,411 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                       String         @id @default(cuid())
+  name                     String         @unique
+  email                    String         @unique
+  phoneNumber              String
+  emailVerified            DateTime?
+  image                    String?
+  password                 String?
+  role                     String         @default("employee")
+  isApproved               Boolean        @default(false)
+  status                   String         @default("active")
+  createdAt                DateTime       @default(now())
+  updatedAt                DateTime       @updatedAt
+  resetToken               String?
+  resetTokenExpires        DateTime?
+  mfaSecret                String?
+  mfaEnabled               Boolean        @default(false)
+  sessionVersion           Int            @default(1)
+  verificationToken        String?
+  verificationTokenExpires DateTime?
+  employee                 Employee?
+  notifications            Notification[]
+  deviceTokens             DeviceToken[]
+  tokens                   Token[]
+
+  @@index([name])
+  @@index([status])
+  @@index([role])
+}
+
+model Employee {
+  id                     Int                     @id @default(autoincrement())
+  userId                 String                  @unique
+  position               String
+  city                   String
+  joinDate               DateTime?
+  pictureUrl             String?
+  absenceRecords         AbsenceRecord[]
+  attendance             Attendance[]
+  documents              Document[]
+  documentDeleteRequests DocumentDeleteRequest[]
+  user                   User                    @relation(fields: [userId], references: [id])
+  locations              EmployeeLocation[]
+  employeeProducts       EmployeeProduct[]
+  settings               EmployeeSettings?
+  notifications          Notification[]
+  reports                Report[]
+  salaries               Salary[]
+  sales                  Sale[]
+  salesRecords           SalesRecord[]
+  salesTargets           SalesTarget[]
+  timeLogs               TimeLog[]
+  deviceTokens           DeviceToken[]
+
+  @@index([city])
+  @@index([position])
+  @@index([joinDate])
+}
+
+model Attendance {
+  id             Int              @id @default(autoincrement())
+  employeeId     Int
+  date           DateTime
+  checkIn        DateTime?
+  checkOut       DateTime?
+  notes          String?
+  status         AttendanceStatus
+  workHours      String?
+  checkInUndone  Boolean          @default(false)
+  checkOutUndone Boolean          @default(false)
+  employee       Employee         @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId, date])
+  @@index([status, date])
+}
+
+model Sale {
+  id                Int              @id @default(autoincrement())
+  employeeId        Int
+  productId         Int
+  quantity          Int
+  amount            Float
+  date              DateTime
+  notes             String?
+  employeeProductId Int?
+  employee          Employee         @relation(fields: [employeeId], references: [id])
+  assignment        EmployeeProduct? @relation("SaleToAssignment", fields: [employeeProductId], references: [id])
+  product           Product          @relation(fields: [productId], references: [id])
+
+  @@index([employeeId, date])
+  @@index([date])
+}
+
+model Product {
+  id           Int               @id @default(autoincrement())
+  name         String
+  description  String?
+  price        Float
+  stockLevel   Int?              @default(0)
+  imageUrl     String?
+  employees    EmployeeProduct[]
+  sales        Sale[]
+  salesRecords SalesRecord[]
+
+  @@index([name])
+}
+
+model EmployeeProduct {
+  id              Int      @id @default(autoincrement())
+  employeeId      Int
+  productId       Int
+  assignedAt      DateTime @default(now())
+  quantity        Int      @default(1)
+  status          String   @default("assigned")
+  expiredQuantity Int?
+  employee        Employee @relation(fields: [employeeId], references: [id])
+  product         Product  @relation(fields: [productId], references: [id])
+  sales           Sale[]   @relation("SaleToAssignment")
+
+  @@unique([employeeId, productId, assignedAt])
+}
+
+model Document {
+  id                     Int                     @id @default(autoincrement())
+  employeeId             Int
+  type                   DocumentType
+  title                  String
+  description            String?
+  fileUrl                String
+  uploadedAt             DateTime                @default(now())
+  status                 String                  @default("Pending")
+  uploadedDuring         String?
+  isRegistrationDocument Boolean                 @default(false)
+  rejectionReason        String?
+  employee               Employee                @relation(fields: [employeeId], references: [id])
+  auditLogs              DocumentAuditLog[]
+  deleteRequests         DocumentDeleteRequest[]
+
+  @@index([employeeId])
+  @@index([status])
+  @@index([isRegistrationDocument])
+}
+
+model TimeLog {
+  id             Int      @id @default(autoincrement())
+  employeeId     Int
+  date           DateTime
+  hours          Float
+  overtimeHours  Float    @default(0)
+  undertimeHours Float    @default(0)
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  employee       Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId])
+  @@index([date])
+}
+
+model SalesRecord {
+  id         Int      @id @default(autoincrement())
+  employeeId Int
+  date       DateTime
+  amount     Float
+  productId  Int
+  quantity   Int
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  product    Product  @relation(fields: [productId], references: [id])
+
+  @@index([employeeId])
+  @@index([date])
+}
+
+model AbsenceRecord {
+  id         Int      @id @default(autoincrement())
+  employeeId Int
+  date       DateTime
+  type       String
+  duration   Float
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  employee   Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId])
+  @@index([date])
+}
+
+model Salary {
+  id           Int              @id @default(autoincrement())
+  employeeId   Int
+  amount       Float
+  status       String
+  payDate      DateTime
+  startDate    DateTime
+  endDate      DateTime
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  deleted      Boolean          @default(false)
+  correctionOf Int?
+  metadata     Json?
+  original     Salary?          @relation("CorrectionRelation", fields: [correctionOf], references: [id])
+  corrections  Salary[]         @relation("CorrectionRelation")
+  employee     Employee         @relation(fields: [employeeId], references: [id])
+  auditLogs    SalaryAuditLog[]
+
+  @@index([employeeId])
+  @@index([payDate])
+  @@index([correctionOf])
+  @@index([startDate])
+  @@index([endDate])
+}
+
+model SalaryAuditLog {
+  id        Int      @id @default(autoincrement())
+  salaryId  Int
+  action    String
+  oldValue  Json?
+  newValue  Json?
+  changedBy String?
+  changedAt DateTime @default(now())
+  salary    Salary   @relation(fields: [salaryId], references: [id])
+}
+
+model EmployeeLocation {
+  id           String   @id @default(cuid())
+  employeeId   Int
+  latitude     Float
+  longitude    Float
+  accuracy     Float?
+  timestamp    DateTime @default(now())
+  batteryLevel Int?
+  isMoving     Boolean  @default(true)
+  address      String?
+  employee     Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId])
+  @@index([timestamp])
+  @@index([employeeId, timestamp])
+}
+
+model Report {
+  id         String   @id @default(cuid())
+  employeeId Int
+  type       String
+  status     String?
+  details    Json
+  notes      String?
+  date       DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  employee   Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId])
+  @@index([type])
+  @@index([status])
+  @@index([date])
+}
+
+model DocumentDeleteRequest {
+  id         Int       @id @default(autoincrement())
+  documentId Int
+  employeeId Int
+  reason     String
+  status     String    @default("pending")
+  createdAt  DateTime  @default(now())
+  reviewedAt DateTime?
+  document   Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  employee   Employee  @relation(fields: [employeeId], references: [id])
+
+  @@index([documentId])
+  @@index([employeeId])
+}
+
+model DocumentAuditLog {
+  id              Int      @id @default(autoincrement())
+  documentId      Int
+  action          String
+  oldStatus       String?
+  newStatus       String?
+  rejectionReason String?
+  adminId         String?
+  createdAt       DateTime @default(now())
+  document        Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+}
+
+model SalesTarget {
+  id           Int      @id @default(autoincrement())
+  employeeId   Int
+  year         Int
+  month        Int
+  targetAmount Float
+  employee     Employee @relation(fields: [employeeId], references: [id])
+
+  @@unique([employeeId, year, month])
+}
+
+model EmployeeSettings {
+  id             Int      @id @default(autoincrement())
+  employeeId     Int      @unique
+  language       String   @default("en")
+  locationAccess Boolean  @default(false)
+  notifications  Boolean  @default(true)
+  employee       Employee @relation(fields: [employeeId], references: [id])
+}
+
+model Notification {
+  id          Int       @id @default(autoincrement())
+  employeeId  Int?
+  userId      String?
+  type        String
+  message     String
+  read        Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  actionUrl   String?
+  actionLabel String?
+  employee    Employee? @relation(fields: [employeeId], references: [id])
+  user        User?     @relation(fields: [userId], references: [id])
+
+  @@index([employeeId])
+  @@index([userId])
+}
+
+model DeviceToken {
+  id         Int       @id @default(autoincrement())
+  token      String    @unique
+  userId     String
+  employeeId Int?
+  platform   String    @default("unknown")
+  tokenType  String    @default("fcm")
+  createdAt  DateTime  @default(now())
+  lastSeen   DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employee   Employee? @relation(fields: [employeeId], references: [id])
+
+  @@index([userId])
+  @@index([employeeId])
+}
+
+model Settings {
+  id                       Int     @id @default(autoincrement())
+  adminRealtimeEnabled     Boolean @default(true)
+  employeeRealtimeEnabled  Boolean @default(true)
+  lowBatteryAlertsEnabled  Boolean @default(true)
+  lowBatteryThreshold      Int     @default(20)
+  maxLoginAttempts         String  @default("5")
+  mfaEnabled               Boolean @default(true)
+  offlineAlertThreshold    Int     @default(300)
+  offlineAlertsEnabled     Boolean @default(true)
+  passwordPolicy           String  @default("strong")
+  sessionTimeout           String  @default("30m")
+  stationaryAlertThreshold Int     @default(600)
+  stationaryAlertsEnabled  Boolean @default(true)
+}
+
+model SecuritySettings {
+  id                       Int      @id @default(1)
+  requireMfa               Boolean  @default(false)
+  passwordMinLength        Int      @default(8)
+  passwordRequireSpecialChar Boolean @default(true)
+  passwordRequireNumber    Boolean  @default(true)
+  passwordRequireUppercase Boolean  @default(true)
+  sessionTimeout           Int      @default(60)
+  maxLoginAttempts         Int      @default(5)
+  recaptchaEnabled         Boolean  @default(false)
+  recaptchaSiteKey         String?
+  recaptchaSecretKey       String?
+  allowedDomains           String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+}
+
+enum AttendanceStatus {
+  Present
+  Late
+  Absent
+}
+
+enum DocumentType {
+  passport
+  national_id
+}
+
+model Token {
+  id        Int       @id @default(autoincrement())
+  token     String    @unique
+  type      TokenType
+  expires   DateTime
+  createdAt DateTime  @default(now())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+enum TokenType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}

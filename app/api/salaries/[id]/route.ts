@@ -8,4 +8,4 @@ export async function GET(req: NextRequest, context: { params: { id: string } })
   if (!salary) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const metadata = (salary.metadata && typeof salary.metadata === 'object') ? salary.metadata : {};
   return NextResponse.json({ ...salary, ...metadata });
-} 
+}

@@ -9,6 +9,8 @@ import { notifyUserOrEmployee } from "@/lib/notifications";
 import { checkRateLimit } from '@/lib/rateLimiter';
 import { validateFile } from '@/lib/validateFile';
 import { sanitizeInput } from '@/lib/sanitizeInput';
+import { sendEmail } from "@/lib/email";
+import crypto from "crypto";
 
 // Function to verify reCAPTCHA token
 async function verifyRecaptcha(token: string): Promise<boolean> {
@@ -126,6 +128,10 @@ export async function POST(req: NextRequest) {
     // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
     
+    // Generate verification token
+    const verificationToken = crypto.randomBytes(32).toString("hex");
+    const verificationTokenExpires = new Date(Date.now() + 24 * 3600000); // 24 hours
+    
     // Create the user (role: employee, status: active)
     const user = await prisma.user.create({
       data: {
@@ -133,20 +139,53 @@ export async function POST(req: NextRequest) {
         email: normalizedEmail,
         phoneNumber,
         password: hashedPassword,
+        image: pictureUrl,
         role: "employee",
         isApproved: false,
         status: "active",
+        verificationToken,
+        verificationTokenExpires,
         employee: {
           create: {
             position: "New Employee",
             city,
+            pictureUrl: pictureUrl,
           }
         }
       },
     });
     
+    // Send verification email
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+    const verificationLink = `${baseUrl}/verify-email/${verificationToken}`;
+    
+    try {
+      await sendEmail({
+        to: normalizedEmail,
+        subject: "Verify your email address",
+        html: `
+          <h1>Email Verification</h1>
+          <p>Thank you for registering with our Employee Management System.</p>
+          <p>Please verify your email address by clicking the link below:</p>
+          <p><a href="${verificationLink}" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Verify Email</a></p>
+          <p>Or copy and paste this URL into your browser:</p>
+          <p>${verificationLink}</p>
+          <p>This link will expire in 24 hours.</p>
+        `
+      });
+    } catch (emailError) {
+      console.error("Failed to send verification email:", emailError);
+      // Continue with registration even if email fails
+    }
+    
     // Respond to the user first for faster UX
-    const response = NextResponse.json({ success: true, message: "registrationSuccess" });
+    const response = NextResponse.json({ 
+      success: true, 
+      message: "registrationSuccess",
+      verificationEmailSent: true,
+      requiresVerification: true
+    });
+    
     // Send notifications asynchronously (fire-and-forget)
     (async () => {
       try {
@@ -164,7 +203,7 @@ export async function POST(req: NextRequest) {
     await notifyUserOrEmployee({
       employeeId: user.employee?.id,
       type: "employee_registration_submitted",
-          message: `Your registration was submitted and is pending approval on ${now}`,
+          message: `Your registration was submitted. Please verify your email and wait for approval.`,
       actionUrl: "/employee/profile",
       actionLabel: "View Status",
     });

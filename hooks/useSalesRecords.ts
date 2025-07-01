@@ -1,4 +1,5 @@
 import useSWR from 'swr';
+import { adminFetcher } from '@/lib/admin-api-client';
 
 export interface SalesRecordsFilters {
   page?: number;
@@ -27,10 +28,7 @@ function buildQuery(filters: SalesRecordsFilters) {
 
 export function useSalesRecords(filters: SalesRecordsFilters) {
   const url = buildQuery(filters);
-  const { data, error, isLoading, mutate } = useSWR(url, (url) => fetch(url).then(res => {
-    if (!res.ok) throw new Error('Failed to fetch sales records');
-    return res.json();
-  }));
+  const { data, error, isLoading, mutate } = useSWR(url, adminFetcher);
   return {
     sales: data?.sales || [],
     total: data?.total || 0,

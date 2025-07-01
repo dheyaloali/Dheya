@@ -5,16 +5,35 @@ import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
 export default function SetupMfaPage() {
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const router = useRouter();
   const [qrCode, setQrCode] = useState("");
   const [secret, setSecret] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    if (session?.user?.email) {
+    // If not authenticated, redirect to login
+    if (status === "unauthenticated") {
+      router.push("/login");
+      return;
+    }
+
+    // If authenticated and MFA is already enabled, redirect to dashboard
+    if (status === "authenticated" && session?.user?.mfaEnabled === true) {
+      if (session.user.isAdmin) {
+        router.push("/admin/dashboard");
+      } else {
+        router.push("/employee/dashboard");
+      }
+      return;
+    }
+
+    // Only fetch QR code if authenticated and MFA not already enabled
+    if (status === "authenticated" && session?.user?.email) {
+      setIsLoading(true);
       fetch("/api/auth/mfa/setup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -24,27 +43,49 @@ export default function SetupMfaPage() {
         .then((data) => {
           setQrCode(data.qrCodeDataUrl);
           setSecret(data.secret);
+          setIsLoading(false);
+        })
+        .catch(err => {
+          console.error("Error fetching MFA setup:", err);
+          setError("Failed to load MFA setup. Please try again.");
+          setIsLoading(false);
         });
     }
-  }, [session]);
+  }, [session, status, router]);
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setSuccess("");
-    const res = await fetch("/api/auth/mfa/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: session?.user?.email, token: code }),
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setSuccess("MFA setup complete! Please log in again.");
-      setTimeout(() => signOut({ callbackUrl: "/login" }), 2000);
-    } else {
-      setError(data.error || "Invalid code. Please try again.");
+    try {
+      const res = await fetch("/api/auth/mfa/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: session?.user?.email, token: code }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSuccess("MFA setup complete! Please log in again.");
+        setTimeout(() => signOut({ callbackUrl: "/login" }), 2000);
+      } else {
+        setError(data.error || "Invalid code. Please try again.");
+      }
+    } catch (err) {
+      console.error("Error verifying MFA code:", err);
+      setError("Failed to verify MFA code. Please try again.");
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+        <div className="text-center">
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent"></div>
+          <p className="mt-2">Loading MFA setup...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-50">

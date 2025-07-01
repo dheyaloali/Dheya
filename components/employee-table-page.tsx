@@ -55,7 +55,7 @@ export default function EmployeeTablePage() {
   };
 
   return (
-    <div className="flex flex-col gap-6 w-full mb-6">
+    <div className="flex flex-col gap-6 w-full mb-6 pt-6 px-4">
       <EmployeeTableSearchInput search={search} setSearch={setSearch} />
       <EmployeeTable search={search} setSearch={setSearch} />
     </div>

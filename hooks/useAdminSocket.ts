@@ -9,21 +9,35 @@ import { io, Socket } from "socket.io-client";
 let globalSocket: Socket | null = null;
 let connectedGlobally = false;
 let lastConnectAttempt = 0;
+let heartbeatInterval: NodeJS.Timeout | null = null;
+let reconnectThrottleTimeout: NodeJS.Timeout | null = null;
 
 // Add listener for beforeunload to capture connection state between navigations
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', () => {
     connectedGlobally = globalSocket?.connected || false;
-    console.log("[AdminSocket] Saving connection state before unload:", connectedGlobally);
+    // Clear any intervals/timeouts when page unloads
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    if (reconnectThrottleTimeout) clearTimeout(reconnectThrottleTimeout);
   });
   
   // Add a global function to synchronize connection state
   // @ts-ignore - Adding custom property to window
-  window.syncAdminSocketState = (connected) => {
-    console.log("[AdminSocket] Manual sync of connection state:", connected);
+  window.syncAdminSocketState = (connected: boolean) => {
     connectedGlobally = connected;
+    
+    // Dispatch a custom event that other components can listen to
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('admin-socket-state-changed', { 
+        detail: { connected } 
+      }));
+    }
   };
 }
+
+// Connection throttling to prevent rapid reconnection attempts
+const THROTTLE_RECONNECT_MS = 5000; // 5 seconds minimum between connection attempts
+const HEARTBEAT_INTERVAL_MS = 30000; // 30 seconds between heartbeats
 
 export function useAdminSocket() {
   const { data: session, status } = useSession();
@@ -45,17 +59,11 @@ export function useAdminSocket() {
 
   // Force connection state to align with settings (critical for source of truth)
   useEffect(() => {
-    console.log("[AdminSocket] Settings changed, updating connection state:", { 
-      shouldBeConnected, 
-      adminRealtimeEnabled: settings?.adminRealtimeEnabled
-    });
-    
     // IMMEDIATELY force connection state to match settings (source of truth)
     if (shouldBeConnected) {
       // Ensure we have a socket and it's connected
       if (!socket) {
         // Create socket immediately if it doesn't exist
-        console.log("[AdminSocket] Creating socket and connecting immediately");
         const wsUrl = process.env.NEXT_PUBLIC_WS_URL || (
           typeof window !== 'undefined' 
             ? `${window.location.protocol}//${window.location.hostname}:3001`
@@ -67,9 +75,50 @@ export function useAdminSocket() {
             .find(([key]) => key.startsWith("next-auth.session-token"))?.[1];
             
         if (token && session?.user?.id) {
+          // Throttle connection attempts
+          const now = Date.now();
+          if (now - lastConnectAttempt < THROTTLE_RECONNECT_MS) {
+            // If we've tried to connect recently, wait before trying again
+            if (!reconnectThrottleTimeout) {
+              reconnectThrottleTimeout = setTimeout(() => {
+                reconnectThrottleTimeout = null;
+                lastConnectAttempt = Date.now();
+                initializeSocket(token, session.user.id);
+              }, THROTTLE_RECONNECT_MS - (now - lastConnectAttempt));
+            }
+            return;
+          }
+          
+          lastConnectAttempt = now;
+          initializeSocket(token, session.user.id);
+        }
+      } else if (!socket.connected) {
+        // Connect existing socket
+        socket.connect();
+      }
+    } else {
+      // We should NOT be connected according to settings
+      if (socket && socket.connected) {
+        socket.disconnect();
+      }
+      
+      // Always update state to match settings
+      if (connected) {
+        setConnected(false);
+        connectedGlobally = false;
+      }
+    }
+    
+    function initializeSocket(token: string, userId: string) {
+      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || (
+        typeof window !== 'undefined' 
+          ? `${window.location.protocol}//${window.location.hostname}:3001`
+          : 'http://localhost:3001'
+      );
+      
           globalSocket = io(wsUrl, {
             auth: {
-              userId: session.user.id,
+          userId: userId,
               sessionToken: token,
               isAdmin: true
             },
@@ -87,22 +136,50 @@ export function useAdminSocket() {
           
           // Setup listeners immediately
           globalSocket.on("connect", () => {
-            console.log("[AdminSocket] Connected to Socket.IO server");
             setConnected(true);
             connectedGlobally = true;
             hasShownErrorRef.current = false;
             reconnectAttemptsRef.current = 0;
+        
+        // Update global state
+        window.syncAdminSocketState(true);
             
             // Dispatch event to notify other components
             if (typeof window !== 'undefined') {
               window.dispatchEvent(new CustomEvent('admin-socket-connected'));
             }
+        
+        // Start heartbeat to keep connection alive
+        if (heartbeatInterval) clearInterval(heartbeatInterval);
+        heartbeatInterval = setInterval(() => {
+          if (globalSocket && globalSocket.connected) {
+            globalSocket.emit('heartbeat', { timestamp: Date.now() });
+          }
+        }, HEARTBEAT_INTERVAL_MS);
+      });
+      
+      // Add heartbeat response handler
+      globalSocket.on("heartbeat_ack", (data) => {
+        // Connection is confirmed alive, ensure UI shows connected
+        if (!connectedGlobally) {
+          setConnected(true);
+          connectedGlobally = true;
+          window.syncAdminSocketState(true);
+            }
           });
           
           globalSocket.on("disconnect", (reason) => {
-            console.log("[AdminSocket] Disconnected from Socket.IO server:", reason);
             setConnected(false);
             connectedGlobally = false;
+        
+        // Update global state
+        window.syncAdminSocketState(false);
+        
+        // Clear heartbeat on disconnect
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+          heartbeatInterval = null;
+        }
             
             // Dispatch event to notify other components
             if (typeof window !== 'undefined') {
@@ -112,32 +189,10 @@ export function useAdminSocket() {
           
           // Connect immediately
           globalSocket.connect();
-        }
-      } else if (!socket.connected) {
-        // Connect existing socket
-        console.log("[AdminSocket] Connecting existing socket immediately");
-        socket.connect();
-      }
-    } else {
-      // We should NOT be connected according to settings
-      if (socket && socket.connected) {
-        console.log("[AdminSocket] Settings indicate we should disconnect - disconnecting immediately");
-        socket.disconnect();
-      }
-      
-      // Always update state to match settings
-      if (connected) {
-        setConnected(false);
-        connectedGlobally = false;
-      }
     }
   }, [settings?.adminRealtimeEnabled, status, session, socket, connected, shouldBeConnected]);
 
-  console.log("[AdminSocket] Hook called. Status:", status, "Session:", session);
-
   useEffect(() => {
-    console.log("[AdminSocket] useEffect running. Status:", status, "isAdmin:", session?.user?.isAdmin, "adminRealtimeEnabled:", settings?.adminRealtimeEnabled);
-
     // Show explicit toast if real-time is disabled by settings
     if (
       status === "authenticated" &&
@@ -157,10 +212,7 @@ export function useAdminSocket() {
   }, [status, session, settings?.adminRealtimeEnabled, toast]);
 
   useEffect(() => {
-    console.log("[AdminSocket] useEffect running. Status:", status, "isAdmin:", session?.user?.isAdmin, "adminRealtimeEnabled:", settings?.adminRealtimeEnabled);
-
     if (status !== "authenticated" || !session?.user?.isAdmin || settings?.adminRealtimeEnabled === false) {
-      console.log("[AdminSocket] Not connecting. Status:", status, "isAdmin:", session?.user?.isAdmin, "adminRealtimeEnabled:", settings?.adminRealtimeEnabled);
       if (socketRef.current) {
         socketRef.current.disconnect();
         socketRef.current = null;
@@ -168,6 +220,12 @@ export function useAdminSocket() {
         setSocket(null);
         setConnected(false);
         connectedGlobally = false;
+        
+        // Clear any intervals
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+          heartbeatInterval = null;
+        }
       }
       return;
     }
@@ -181,7 +239,6 @@ export function useAdminSocket() {
     }
 
     if (!token) {
-      console.error("[AdminSocket] No session token found");
       setSocket(null);
       setConnected(false);
       return;
@@ -194,7 +251,6 @@ export function useAdminSocket() {
                           !globalSocket.disconnected;
 
     if (isSocketHealthy) {
-      console.log("[AdminSocket] Reusing existing healthy socket connection");
       socketRef.current = globalSocket;
       setSocket(globalSocket);
       setConnected(true);
@@ -205,11 +261,10 @@ export function useAdminSocket() {
     // If we get here, either no socket exists or it's in a bad state after navigation
     // Disconnect and clean up any existing socket before creating a new one
     if (globalSocket) {
-      console.log("[AdminSocket] Existing socket found but not healthy, reconnecting...");
       try {
         globalSocket.disconnect();
       } catch (e) {
-        console.error("[AdminSocket] Error disconnecting socket:", e);
+        // Error disconnecting socket - silent fail
       }
     }
 
@@ -224,20 +279,31 @@ export function useAdminSocket() {
         ? `${window.location.protocol}//${window.location.hostname}:3001`
         : 'http://localhost:3001'
     );
-    console.log("[AdminSocket] Using WebSocket URL:", wsUrl);
 
     // Reset reconnect attempts if we're making a fresh connection
     if (!socketRef.current) {
       reconnectAttemptsRef.current = 0;
     }
 
-    try {
-      console.log("[AdminSocket] Attempting to connect...");
-      console.log("[AdminSocket] Auth data:", {
-        userId: session?.user?.id,
-        isAdmin: true
-      });
-      
+    // Throttle connection attempts
+    const now = Date.now();
+    if (now - lastConnectAttempt < THROTTLE_RECONNECT_MS) {
+      // If we've tried to connect recently, wait before trying again
+      if (!reconnectThrottleTimeout) {
+        reconnectThrottleTimeout = setTimeout(() => {
+          reconnectThrottleTimeout = null;
+          lastConnectAttempt = Date.now();
+          initializeSocket();
+        }, THROTTLE_RECONNECT_MS - (now - lastConnectAttempt));
+      }
+      return;
+    }
+    
+    lastConnectAttempt = now;
+    initializeSocket();
+
+    function initializeSocket() {
+      try {
       // Don't create a new socket if we already have one
       if (!globalSocket) {
         globalSocket = io(wsUrl, {
@@ -249,164 +315,191 @@ export function useAdminSocket() {
           transports: ['websocket', 'polling'],
           reconnection: true,
           reconnectionAttempts: 10,
-          reconnectionDelay: 1000,
-          reconnectionDelayMax: 5000,
-          timeout: 20000,
+            reconnectionDelay: 500,
+            reconnectionDelayMax: 2000,
+            timeout: 10000,
           forceNew: true,
-          upgrade: true,
-          rememberUpgrade: true
         });
         
         socketRef.current = globalSocket;
         setSocket(globalSocket);
-      }
 
-      // Handle successful connection
-      globalSocket.on("connected", (data) => {
-        console.log("[AdminSocket] Successfully connected:", data);
+          // Setup listeners immediately
+          globalSocket.on("connect", () => {
         setConnected(true);
         connectedGlobally = true;
         hasShownErrorRef.current = false;
         reconnectAttemptsRef.current = 0;
 
-        // Emit a special event for any listeners
+            // Start heartbeat to keep connection alive
+            if (heartbeatInterval) {
+              clearInterval(heartbeatInterval);
+            }
+            heartbeatInterval = setInterval(() => {
+              if (globalSocket && globalSocket.connected) {
+                globalSocket.emit('heartbeat', { timestamp: Date.now() });
+              }
+            }, HEARTBEAT_INTERVAL_MS);
+            
+            // Dispatch event to notify other components
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('admin-socket-connected'));
         }
-
-        toast({
-          title: "Connected to real-time server",
-          description: "You are now receiving live updates.",
-          variant: "default",
-        });
       });
 
-      // Handle connection errors
       globalSocket.on("connect_error", (error) => {
-        console.error("[AdminSocket] Connection error:", {
-          error,
-          url: wsUrl,
-          timestamp: new Date().toISOString(),
-          protocol: window.location.protocol,
-          host: window.location.hostname
-        });
-        
         setConnected(false);
         connectedGlobally = false;
         
+            // Only show error once
         if (!hasShownErrorRef.current) {
           toast({
-            title: "Connection failed",
-            description: error.message || "Failed to connect to real-time server. Retrying...",
+                title: "Connection Error",
+                description: "Failed to connect to real-time server. Some features may be limited.",
             variant: "destructive",
           });
           hasShownErrorRef.current = true;
         }
-      });
 
-      // Handle authentication errors
-      globalSocket.on("error", (error) => {
-        console.error("[AdminSocket] Server error:", error);
+            // Increment reconnect attempts
+            reconnectAttemptsRef.current++;
         
-        if (error.message?.includes("Authentication failed")) {
-          // Handle authentication failure
+            // If we've exceeded max reconnect attempts, stop trying
+            if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
           toast({
-            title: "Authentication failed",
-            description: "Your session has expired. Please refresh the page.",
+                title: "Connection Failed",
+                description: "Maximum reconnection attempts reached. Please refresh the page.",
             variant: "destructive",
           });
+              return;
+            }
           
-          // Disconnect and clear socket
+            // Exponential backoff for reconnect
+            const delay = Math.min(1000 * (2 ** reconnectAttemptsRef.current), 30000);
+            reconnectTimeoutRef.current = setTimeout(() => {
           if (globalSocket) {
-            globalSocket.disconnect();
-            globalSocket = null;
-            socketRef.current = null;
-            setSocket(null);
-          }
+                globalSocket.connect();
+              }
+            }, delay);
+          });
           
-          // Force page refresh after a delay
-          setTimeout(() => {
-            window.location.reload();
-          }, 2000);
-        } else {
-          // Handle other errors
+          globalSocket.on("error", (error) => {
           toast({
             title: "Server Error",
-            description: error.message || "An error occurred",
+              description: "An error occurred with the real-time connection.",
             variant: "destructive",
           });
-        }
       });
 
-      // Handle disconnection
       globalSocket.on("disconnect", (reason) => {
-        console.log("[AdminSocket] Disconnected from Socket.IO server:", reason);
         setConnected(false);
         connectedGlobally = false;
         
-        // Emit a special event for any listeners
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('admin-socket-disconnected'));
-        }
-        
-        if (!hasShownErrorRef.current) {
+            // Clear heartbeat on disconnect
+            if (heartbeatInterval) {
+              clearInterval(heartbeatInterval);
+              heartbeatInterval = null;
+            }
+            
+            // Only show disconnect toast for unexpected disconnects
+            if (reason !== "io client disconnect" && reason !== "io server disconnect") {
           toast({
-            title: "Disconnected from real-time server",
-            description: "Switched to fallback mode. Data may be delayed.",
-            variant: "destructive",
+                title: "Disconnected",
+                description: "Lost connection to real-time server. Attempting to reconnect...",
+                variant: "default",
           });
-          hasShownErrorRef.current = true;
+            }
+            
+            // Dispatch event to notify other components
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('admin-socket-disconnected', { 
+                detail: { reason } 
+              }));
         }
       });
 
       globalSocket.on("notification", (data) => {
-        console.log("[AdminSocket] Received notification:", data);
-        
-        // Show toast notification
         toast({
-          title: data.type.startsWith("admin_") ? "Admin Action" :
-                data.type.startsWith("employee_") ? "Employee Action" :
-                "Notification",
+              title: data.title || "Notification",
           description: data.message,
-          variant: "default",
+              variant: data.type === "error" ? "destructive" : "default",
         });
       });
 
-      return () => {
-        // Don't disconnect on unmount, keep the socket alive
-        // Only remove our local event listeners
-        if (globalSocket) {
-          // Don't disconnect, just remove listeners for this component
-          // Keep the socket connection alive for future page navigations
+          // Add heartbeat response handler
+          globalSocket.on("heartbeat_ack", (data) => {
+            // Connection is confirmed alive, could update UI or log if needed
+            console.debug("WebSocket heartbeat acknowledged", data);
+          });
+          
+          // Connect immediately
+          globalSocket.connect();
+        } else {
+          // If we already have a socket but it's disconnected, reconnect
+          if (!globalSocket.connected) {
+            globalSocket.connect();
+          }
         }
+      } catch (error) {
+        // Fail silently but show toast
+        toast({
+          title: "Connection Error",
+          description: "Failed to initialize real-time connection.",
+          variant: "destructive",
+        });
+      }
+    }
+    
+    return () => {
+      // Clear any reconnect timeout
         if (reconnectTimeoutRef.current) {
           clearTimeout(reconnectTimeoutRef.current);
         }
-      };
-    } catch (error) {
-      console.error("[AdminSocket] Error creating socket:", error);
-      setConnected(false);
-      connectedGlobally = false;
+      
+      // Clear heartbeat interval
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
     }
-  }, [status, session, settings?.adminRealtimeEnabled, toast, mutate]);
+    };
+  }, [status, session, settings?.adminRealtimeEnabled, toast]);
 
-  // Clean, focused API
   const connect = () => {
-    console.log("[AdminSocket] Manually connecting socket");
-    
-    // Only connect the socket if it exists
-    if (globalSocket) {
-      globalSocket.connect();
+    if (socket && !socket.connected) {
+      // Throttle connection attempts
+      const now = Date.now();
+      if (now - lastConnectAttempt < THROTTLE_RECONNECT_MS) {
+        return; // Prevent rapid connection attempts
+      }
+      lastConnectAttempt = now;
+      socket.connect();
     }
+    
+    // Also update settings via API
+    fetch('/api/admin/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminRealtimeEnabled: true })
+    }).then(() => mutate());
   };
 
   const disconnect = () => {
-    console.log("[AdminSocket] Manually disconnecting socket");
-    
-    // Only disconnect the socket if it exists
-    if (globalSocket) {
-      globalSocket.disconnect();
+    if (socket && socket.connected) {
+      socket.disconnect();
+      
+      // Clear heartbeat on manual disconnect
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
     }
+    
+    // Also update settings via API
+    fetch('/api/admin/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminRealtimeEnabled: false })
+    }).then(() => mutate());
   };
 
   return { socket, connected, connect, disconnect };

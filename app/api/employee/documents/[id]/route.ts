@@ -86,4 +86,4 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   } catch {}
   await prisma.document.delete({ where: { id } });
   return NextResponse.json({ success: true });
-} 
+}

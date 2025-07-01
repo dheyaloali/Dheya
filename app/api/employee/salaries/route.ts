@@ -113,9 +113,8 @@ export async function GET(req: NextRequest) {
       totalPages: Math.ceil(total / pageSize)
     });
   } catch (error) {
-    console.error('Error fetching employee salary records:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch salary records' },
+      { error: "Failed to fetch employee salary records" },
       { status: 500 }
     );
   }

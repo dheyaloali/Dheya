@@ -20,6 +20,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useToast } from '@/components/ui/use-toast'
 import useSWR, { mutate as globalMutate } from 'swr'
 import { useTranslations } from "next-intl"
+import { useCurrency } from "@/components/providers/currency-provider"
 
 export function RecordSaleDialog() {
   const [isOpen, setIsOpen] = useState(false)
@@ -41,6 +42,7 @@ export function RecordSaleDialog() {
   const products = data?.products || [];
   const { toast } = useToast()
   const t = useTranslations('Sales')
+  const { formatAmount } = useCurrency()
 
   // Initialize quantities to current sold quantity when products change or dialog opens
   useEffect(() => {
@@ -245,7 +247,7 @@ export function RecordSaleDialog() {
                           }
                         />
                         <span>{p.name}</span>
-                        <span className="ml-auto text-xs text-muted-foreground">${p.price?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span className="ml-auto text-xs text-muted-foreground">{formatAmount(p.price)}</span>
                         {p.status === 'sold' && <span className="ml-2 text-green-600 font-semibold">{t('sold')}</span>}
                         {p.status === 'partially_sold' && <span className="ml-2 text-yellow-600 font-semibold">{t('partiallySold')}</span>}
                       </label>
@@ -353,7 +355,7 @@ export function RecordSaleDialog() {
                                  status === "partially_sold" ? <span className="text-yellow-600 font-semibold">Partially Sold</span> :
                                  <span className="text-gray-500">Assigned</span>}
                               </td>
-                              <td className="px-4 py-2 text-right font-semibold">${total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                              <td className="px-4 py-2 text-right font-semibold">{formatAmount(total)}</td>
                             </tr>
                           )
                         })}
@@ -374,7 +376,7 @@ export function RecordSaleDialog() {
                     <div key={id + '-' + idx} className="border rounded-lg bg-gray-50 shadow-sm">
                       <div className="flex items-center gap-2 px-4 py-2">
                         <span className="font-medium flex-1 truncate text-base">{product?.name}</span>
-                        <span className="text-xs text-muted-foreground mr-2">${price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span className="text-xs text-muted-foreground mr-2">{formatAmount(price)}</span>
                       </div>
                       <div className="flex items-center gap-3 px-4 pb-4">
                         <div className="flex flex-col w-28">
@@ -407,7 +409,7 @@ export function RecordSaleDialog() {
                         </div>
                         <div className="flex flex-col w-32 text-right">
                           <span className="text-xs text-muted-foreground">Total</span>
-                          <span className="font-semibold">${total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                          <span className="font-semibold">{formatAmount(total)}</span>
                         </div>
                       </div>
                     </div>
@@ -454,7 +456,7 @@ export function RecordSaleDialog() {
                                  status === "partially_sold" ? <span className="text-yellow-600 font-semibold">Partially Sold</span> :
                                  <span className="text-gray-500">Assigned</span>}
                               </td>
-                              <td className="px-4 py-2 text-right font-semibold">${total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                              <td className="px-4 py-2 text-right font-semibold">{formatAmount(total)}</td>
                             </tr>
                           )
                         })}

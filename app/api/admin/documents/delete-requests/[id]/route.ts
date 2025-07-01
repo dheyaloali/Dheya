@@ -62,8 +62,5 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         message: "Your request to delete a document was rejected.",
         actionUrl: "/employee/documents",
         actionLabel: "View Documents",
-      });
-    }
-  }
-  return NextResponse.json(updated);
-} 
+  });
+}

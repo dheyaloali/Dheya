@@ -23,6 +23,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input"
 import Image from "next/image"
 import { LoadingButton } from "@/components/ui/loading-button"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Checkbox } from "@/components/ui/checkbox"
 
 export interface Document {
   id: number;
@@ -62,6 +64,18 @@ export default function DocumentTable({ documents, onDownload, onDelete, onStatu
   // Track which document is being processed for individual actions
   const [changingStatusId, setChangingStatusId] = useState<string | null>(null)
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null)
+
+  const [selected, setSelected] = useState<number[]>([])
+  const [isBulkApproving, setIsBulkApproving] = useState(false)
+  const [isBulkRejecting, setIsBulkRejecting] = useState(false)
+  const [batchResults, setBatchResults] = useState<{ id: number, status: string, error?: string }[]>([])
+  const [showApproveDialog, setShowApproveDialog] = useState(false)
+  const [showBulkRejectDialog, setShowBulkRejectDialog] = useState(false)
+  const [bulkRejectionReason, setBulkRejectionReason] = useState("")
+
+  const allSelected = documents.length > 0 && selected.length === documents.length
+  const toggleSelectAll = () => setSelected(allSelected ? [] : documents.map((doc) => doc.id))
+  const toggleSelect = (id: number) => setSelected(selected.includes(id) ? selected.filter(i => i !== id) : [...selected, id])
 
   // Function to get the appropriate icon based on document type
   const getDocumentIcon = (type: string) => {
@@ -181,13 +195,99 @@ export default function DocumentTable({ documents, onDownload, onDelete, onStatu
     }
   };
 
+  const handleBulkApprove = async () => {
+    setIsBulkApproving(true);
+    setBatchResults([]);
+    try {
+      const res = await fetch("/api/admin/documents/batch", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: selected, action: "approve" }),
+      });
+      const data = await res.json();
+      setBatchResults(data.results || []);
+      setSelected([]);
+    } catch (error) {
+      // Optionally show a toast
+    } finally {
+      setIsBulkApproving(false);
+    }
+  };
+
+  const handleBulkReject = async (reason: string) => {
+    setIsBulkRejecting(true);
+    setBatchResults([]);
+    try {
+      const res = await fetch("/api/admin/documents/batch", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: selected, action: "reject", reason }),
+      });
+      const data = await res.json();
+      setBatchResults(data.results || []);
+      setSelected([]);
+    } catch (error) {
+      // Optionally show a toast
+    } finally {
+      setIsBulkRejecting(false);
+    }
+  };
+
   return (
+    <TooltipProvider>
+      <div className="relative">
+        <div className="mb-4 flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowApproveDialog(true)}
+            disabled={selected.length === 0 || isBulkApproving || isBulkRejecting}
+          >
+            {isBulkApproving ? "Approving..." : "Approve Selected"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowBulkRejectDialog(true)}
+            disabled={selected.length === 0 || isBulkApproving || isBulkRejecting}
+          >
+            {isBulkRejecting ? "Rejecting..." : "Reject Selected"}
+          </Button>
+        </div>
+        {/* Approve Confirmation Dialog */}
+        <Dialog open={showApproveDialog} onOpenChange={setShowApproveDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Approve Selected Documents</DialogTitle>
+            </DialogHeader>
+            <div className="mb-4">
+              Are you sure you want to approve the selected documents?
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowApproveDialog(false)}>
+                Cancel
+              </Button>
+              <LoadingButton
+                variant="default"
+                disabled={isBulkApproving}
+                loading={isBulkApproving}
+                loadingText="Approving..."
+                onClick={async () => {
+                  await handleBulkApprove();
+                  setShowApproveDialog(false);
+                }}
+              >
+                Approve
+              </LoadingButton>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
     <div className="relative">
-      {/* Table headers outside of scroll container */}
       <div className="border-b">
         <table className="w-full">
           <thead>
             <tr>
+                  <th className="p-4"><Checkbox checked={allSelected} onCheckedChange={toggleSelectAll} /></th>
               <th className="text-left p-4">Document</th>
               <th className="text-left p-4">Employee</th>
               <th className="text-left p-4">Date</th>
@@ -209,10 +309,39 @@ export default function DocumentTable({ documents, onDownload, onDelete, onStatu
                 </td>
               </tr>
             ) : (
-              documents.map((doc) => (
-                <tr key={doc.id} className="border-b">
+                  documents.map((doc) => {
+                    const batchResult = batchResults.find(r => r.id === doc.id);
+                    const isError = batchResult?.status === "error";
+                    const isSuccess = batchResult && batchResult.status !== "error";
+                    return (
+                      <tr
+                        key={doc.id}
+                        className={isError ? "bg-red-50" : isSuccess ? "bg-green-50" : ""}
+                      >
                   <td className="p-4">
                     <div className="flex items-center space-x-3">
+                            <Checkbox checked={selected.includes(doc.id)} onCheckedChange={() => toggleSelect(doc.id)} />
+                            {batchResult ? (
+                              isError ? (
+                                <Tooltip>
+                                  <TooltipTrigger>
+                                    <XCircle className="h-5 w-5 text-red-500" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>{batchResult.error || "Error"}</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              ) : (
+                                <Tooltip>
+                                  <TooltipTrigger>
+                                    <CheckCircle className="h-5 w-5 text-green-500" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Success</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              )
+                            ) : null}
                       {getDocumentIcon(doc.type)}
                       <div className="flex-1 min-w-0">
                         <button
@@ -306,10 +435,12 @@ export default function DocumentTable({ documents, onDownload, onDelete, onStatu
                     </DropdownMenu>
                   </td>
                 </tr>
-              ))
+                    );
+                  })
             )}
           </tbody>
         </table>
+          </div>
       </div>
       {/* Rejection Reason Modal */}
       <Dialog open={!!rejectingDoc} onOpenChange={open => { if (!open) setRejectingDoc(null); }}>
@@ -420,7 +551,43 @@ export default function DocumentTable({ documents, onDownload, onDelete, onStatu
           {actionError && <div className="text-red-500 mt-2">{actionError}</div>}
         </DialogContent>
       </Dialog>
+        {/* Bulk Reject Confirmation Dialog */}
+        <Dialog open={showBulkRejectDialog} onOpenChange={setShowBulkRejectDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Reject Selected Documents</DialogTitle>
+            </DialogHeader>
+            <div className="mb-4">
+              <label className="block text-sm font-medium mb-1">Reason for rejection</label>
+              <Input
+                value={bulkRejectionReason}
+                onChange={e => setBulkRejectionReason(e.target.value)}
+                placeholder="Enter reason..."
+                required
+                autoFocus
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowBulkRejectDialog(false)}>Cancel</Button>
+              <LoadingButton
+                variant="destructive"
+                disabled={!bulkRejectionReason.trim() || isBulkRejecting}
+                loading={isBulkRejecting}
+                loadingText="Rejecting..."
+                onClick={async () => {
+                  await handleBulkReject(bulkRejectionReason);
+                  setShowBulkRejectDialog(false);
+                  setBulkRejectionReason("");
+                }}
+              >
+                Reject
+              </LoadingButton>
+            </DialogFooter>
+            {actionError && <div className="text-red-500 mt-2">{actionError}</div>}
+          </DialogContent>
+        </Dialog>
     </div>
+    </TooltipProvider>
   );
 }
 

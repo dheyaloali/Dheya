@@ -8,24 +8,30 @@ datasource db {
 }
 
 model User {
-  id                String         @id @default(cuid())
-  name              String         @unique
-  email             String         @unique
-  phoneNumber       String
-  emailVerified     DateTime?
-  image             String?
-  password          String?
-  role              String         @default("employee")
-  isApproved        Boolean        @default(false)
-  status            String         @default("active")
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
-  resetToken        String?
-  resetTokenExpires DateTime?
-  mfaSecret         String?
-  mfaEnabled        Boolean        @default(false)
-  employee          Employee?
-  notifications     Notification[]
+  id                       String         @id @default(cuid())
+  name                     String         @unique
+  email                    String         @unique
+  phoneNumber              String
+  emailVerified            DateTime?
+  image                    String?
+  password                 String?
+  role                     String         @default("employee")
+  isApproved               Boolean        @default(false)
+  status                   String         @default("active")
+  createdAt                DateTime       @default(now())
+  updatedAt                DateTime       @updatedAt
+  resetToken               String?
+  resetTokenExpires        DateTime?
+  mfaSecret                String?
+  mfaEnabled               Boolean        @default(false)
+  sessionVersion           Int            @default(1)
+  verificationToken        String?
+  verificationTokenExpires DateTime?
+  employee                 Employee?
+  documents                Document[]
+  notifications            Notification[]
+  deviceTokens             DeviceToken[]
+  tokens                   Token[]
 
   @@index([name])
   @@index([status])
@@ -54,6 +60,7 @@ model Employee {
   salesRecords           SalesRecord[]
   salesTargets           SalesTarget[]
   timeLogs               TimeLog[]
+  deviceTokens           DeviceToken[]
 
   @@index([city])
   @@index([position])
@@ -105,8 +112,7 @@ model Product {
   sales        Sale[]
   salesRecords SalesRecord[]
 
-  @@index([status])
-  @@index([quantity])
+  @@index([name])
 }
 
 model EmployeeProduct {
@@ -126,7 +132,8 @@ model EmployeeProduct {
 
 model Document {
   id                     Int                     @id @default(autoincrement())
-  employeeId             Int
+  employeeId             Int?
+  userId                 String?
   type                   DocumentType
   title                  String
   description            String?
@@ -136,11 +143,13 @@ model Document {
   uploadedDuring         String?
   isRegistrationDocument Boolean                 @default(false)
   rejectionReason        String?
-  employee               Employee                @relation(fields: [employeeId], references: [id])
+  employee               Employee?               @relation(fields: [employeeId], references: [id])
+  user                   User?                   @relation(fields: [userId], references: [id])
   auditLogs              DocumentAuditLog[]
   deleteRequests         DocumentDeleteRequest[]
 
   @@index([employeeId])
+  @@index([userId])
   @@index([status])
   @@index([isRegistrationDocument])
 }
@@ -243,6 +252,7 @@ model EmployeeLocation {
 
   @@index([employeeId])
   @@index([timestamp])
+  @@index([employeeId, timestamp])
 }
 
 model Report {
@@ -311,26 +321,115 @@ model EmployeeSettings {
 }
 
 model Notification {
-  id          Int       @id @default(autoincrement())
-  employeeId  Int?
-  userId      String?
-  type        String
-  message     String
-  read        Boolean   @default(false)
-  createdAt   DateTime  @default(now())
-  actionUrl   String?
-  actionLabel String?
-  employee    Employee? @relation(fields: [employeeId], references: [id])
-  user        User?     @relation(fields: [userId], references: [id])
+  id                Int       @id @default(autoincrement())
+  employeeId        Int?
+  userId            String?
+  type              String
+  message           String
+  read              Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  actionUrl         String?
+  actionLabel       String?
+  
+  // 🚀 PRODUCTION: Delivery tracking
+  deliveryStatus    String    @default("pending") // pending, sent, delivered, failed, retrying
+  deliveryAttempts  Int       @default(0)
+  deliveredAt       DateTime?
+  failedAt          DateTime?
+  errorMessage      String?
+  lastAttemptAt     DateTime?
+  
+  // 🚀 PRODUCTION: Analytics & tracking
+  clickedAt         DateTime?
+  actionCompletedAt DateTime?
+  engagementScore   Float?    // 0-1 score based on user interaction
+  priority          String    @default("normal") // low, normal, high, urgent
+  category          String?   // system, business, security, etc.
+  
+  // 🚀 PRODUCTION: Scalability
+  batchId           String?   // For batch processing
+  retryCount        Int       @default(0)
+  maxRetries        Int       @default(3)
+  
+  employee          Employee? @relation(fields: [employeeId], references: [id])
+  user              User?     @relation(fields: [userId], references: [id])
 
   @@index([employeeId])
   @@index([userId])
+  @@index([deliveryStatus])
+  @@index([createdAt])
+  @@index([type])
+  @@index([batchId])
+}
+
+model DeviceToken {
+  id         Int       @id @default(autoincrement())
+  token      String    @unique
+  userId     String
+  employeeId Int?
+  platform   String    @default("unknown")
+  tokenType  String    @default("fcm")
+  createdAt  DateTime  @default(now())
+  lastSeen   DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employee   Employee? @relation(fields: [employeeId], references: [id])
+
+  @@index([userId])
+  @@index([employeeId])
 }
 
 model Settings {
-  id                      Int     @id @default(autoincrement())
-  adminRealtimeEnabled    Boolean @default(true)
-  employeeRealtimeEnabled Boolean @default(true)
+  id                       Int     @id @default(autoincrement())
+  adminRealtimeEnabled     Boolean @default(true)
+  employeeRealtimeEnabled  Boolean @default(true)
+  lowBatteryAlertsEnabled  Boolean @default(true)
+  lowBatteryThreshold      Int     @default(20)
+  maxLoginAttempts         String  @default("5")
+  mfaEnabled               Boolean @default(true)
+  offlineAlertThreshold    Int     @default(300)
+  offlineAlertsEnabled     Boolean @default(true)
+  passwordPolicy           String  @default("strong")
+  sessionTimeout           String  @default("30m")
+  stationaryAlertThreshold Int     @default(600)
+  stationaryAlertsEnabled  Boolean @default(true)
+  
+  // Attendance Time Settings
+  workStartTime            String  @default("09:00")
+  workEndTime              String  @default("17:00")
+  lateThreshold            Int     @default(15)
+  gracePeriod              Int     @default(5)
+  checkInWindowStart       String  @default("07:00")
+  checkInWindowEnd         String  @default("20:00")
+  checkOutWindowStart      String  @default("16:00")
+  checkOutWindowEnd        String  @default("23:59")
+  autoMarkAbsent           Boolean @default(true)
+  weekendWorkEnabled       Boolean @default(false)
+  holidayWorkEnabled       Boolean @default(false)
+  
+  // Currency Settings
+  defaultCurrency          String  @default("USD")
+  exchangeRate             Float   @default(1.0)
+  currencySymbol           String  @default("$")
+  currencyCode             String  @default("USD")
+  currencyName             String  @default("US Dollar")
+  currencyLocale           String  @default("en-US")
+}
+
+model SecuritySettings {
+  id                       Int      @id @default(1)
+  requireMfa               Boolean  @default(false)
+  passwordMinLength        Int      @default(8)
+  passwordRequireSpecialChar Boolean @default(true)
+  passwordRequireNumber    Boolean  @default(true)
+  passwordRequireUppercase Boolean  @default(true)
+  sessionTimeout           Int      @default(60)
+  maxLoginAttempts         Int      @default(5)
+  recaptchaEnabled         Boolean  @default(false)
+  recaptchaSiteKey         String?
+  recaptchaSecretKey       String?
+  allowedDomains           String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 }
 
 enum AttendanceStatus {
@@ -342,4 +441,21 @@ enum AttendanceStatus {
 enum DocumentType {
   passport
   national_id
+}
+
+model Token {
+  id        Int       @id @default(autoincrement())
+  token     String    @unique
+  type      TokenType
+  expires   DateTime
+  createdAt DateTime  @default(now())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+enum TokenType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
 }

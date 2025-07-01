@@ -188,15 +188,6 @@ export async function POST(req: NextRequest) {
         },
       },
     });
-    console.log('Looking for assignment:', {
-      employeeId: employee.id,
-      productId: sale.productId,
-      assignedAt: {
-        gte: startOfDay,
-        lte: endOfDay,
-      },
-    });
-    console.log('Found assignment:', assignment);
     if (assignment) {
       // Sum all sales for this assignment for today (local time)
       const sales = await prisma.sale.aggregate({
@@ -260,4 +251,73 @@ export async function POST(req: NextRequest) {
     // --- End status update logic ---
   }
   return NextResponse.json({ success: true, sales: created });
+}
+
+// GET: List sales for a specific product and employee
+export async function GET_SALES_FOR_PRODUCT_AND_EMPLOYEE(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.message }, { status: auth.status });
+  }
+  const session = auth.session!;
+  const userId = (session.user as any)?.id;
+  const employee = await prisma.employee.findFirst({ where: { userId }, include: { user: true } });
+  if (!employee) {
+    return NextResponse.json({ error: "Employee not found" }, { status: 404 });
+  }
+  try {
+    const { searchParams } = new URL(req.url);
+    const year = parseInt(searchParams.get('year') || `${new Date().getFullYear()}`);
+    const month = parseInt(searchParams.get('month') || `${new Date().getMonth() + 1}`);
+    const productId = searchParams.get('productId');
+    const employeeId = searchParams.get('employeeId');
+
+    // Build the where clause
+    const where: any = {
+      date: {
+        gte: new Date(year, month - 1, 1),
+        lt: new Date(year, month, 1)
+      }
+    };
+
+    if (productId) {
+      where.productId = parseInt(productId);
+    }
+
+    if (employeeId) {
+      where.employeeId = parseInt(employeeId);
+    }
+
+    // Get sales with product and employee details
+    const sales = await prisma.sale.findMany({
+      where,
+      include: {
+        product: {
+          select: {
+            name: true,
+            price: true
+          }
+        },
+        employee: {
+          select: {
+            user: {
+              select: {
+                name: true
+              }
+            }
+          }
+        }
+      },
+      orderBy: {
+        date: 'desc'
+      }
+    });
+
+    return NextResponse.json(sales);
+  } catch (error) {
+    return NextResponse.json(
+      { error: "Failed to fetch sales data" },
+      { status: 500 }
+    );
+  }
 } 

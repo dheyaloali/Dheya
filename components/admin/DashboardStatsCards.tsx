@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Users, CalendarDays, BarChart3, DollarSign } from "lucide-react";
+import { useCurrency } from "@/components/providers/currency-provider";
 
 export interface DashboardStats {
   totalEmployees: number;
@@ -13,22 +14,26 @@ export interface DashboardStats {
   pendingSalariesCount: number;
 }
 
-function formatLargeNumber(num: number | null | undefined): string {
-  if (!num) return "0";
-  if (num >= 1e12) return (num / 1e12).toFixed(2) + "T";
-  if (num >= 1e9) return (num / 1e9).toFixed(2) + "B";
-  if (num >= 1e6) return (num / 1e6).toFixed(2) + "M";
-  if (num >= 1e3) return (num / 1e3).toFixed(2) + "K";
-  return num.toLocaleString();
+function formatLargeNumber(num: number | null | undefined, formatCurrency: (amount: number) => string): string {
+  if (!num) return formatCurrency(0);
+  if (num >= 1e12) return formatCurrency(num / 1e12) + "T";
+  if (num >= 1e9) return formatCurrency(num / 1e9) + "B";
+  if (num >= 1e6) return formatCurrency(num / 1e6) + "M";
+  if (num >= 1e3) return formatCurrency(num / 1e3) + "K";
+  return formatCurrency(num);
 }
 
 export const DashboardStatsCards = ({
   stats,
   loading,
+  isMinimalData = false,
 }: {
   stats: DashboardStats;
   loading: boolean;
+  isMinimalData?: boolean;
 }) => {
+  const { formatCompactAmount } = useCurrency();
+  
   const employeeGrowthText = stats.employeeGrowth > 0
     ? `+${stats.employeeGrowth} from last month`
     : stats.employeeGrowth < 0
@@ -65,7 +70,10 @@ export const DashboardStatsCards = ({
             {loading ? <Skeleton className="h-8 w-20" /> : stats.totalEmployees}
           </div>
           <div className="text-xs text-muted-foreground">
-            {loading ? <Skeleton className="h-4 w-28" /> : employeeGrowthText}
+            {loading || isMinimalData ? 
+              <Skeleton className={`h-4 w-28 ${isMinimalData ? 'bg-gray-100' : ''}`} /> : 
+              employeeGrowthText
+            }
           </div>
         </CardContent>
       </Card>
@@ -80,7 +88,10 @@ export const DashboardStatsCards = ({
             {loading ? <Skeleton className="h-8 w-20" /> : stats.attendanceToday}
           </div>
           <div className="text-xs text-muted-foreground">
-            {loading ? <Skeleton className="h-4 w-28" /> : attendanceRateText}
+            {loading || isMinimalData ? 
+              <Skeleton className={`h-4 w-28 ${isMinimalData ? 'bg-gray-100' : ''}`} /> : 
+              attendanceRateText
+            }
           </div>
         </CardContent>
       </Card>
@@ -92,10 +103,16 @@ export const DashboardStatsCards = ({
         </CardHeader>
         <CardContent>
           <div className="text-2xl font-bold truncate" style={{ maxWidth: 220 }}>
-            {loading ? <Skeleton className="h-8 w-24" /> : `$${formatLargeNumber(stats.totalSales)}`}
+            {loading || isMinimalData ? 
+              <Skeleton className={`h-8 w-24 ${isMinimalData ? 'bg-gray-100' : ''}`} /> : 
+              formatLargeNumber(stats.totalSales, formatCompactAmount)
+            }
           </div>
           <div className="text-xs text-muted-foreground">
-            {loading ? <Skeleton className="h-4 w-28" /> : salesGrowthText}
+            {loading || isMinimalData ? 
+              <Skeleton className={`h-4 w-28 ${isMinimalData ? 'bg-gray-100' : ''}`} /> : 
+              salesGrowthText
+            }
           </div>
         </CardContent>
       </Card>
@@ -107,10 +124,16 @@ export const DashboardStatsCards = ({
         </CardHeader>
         <CardContent>
           <div className="text-2xl font-bold">
-            {loading ? <Skeleton className="h-8 w-20" /> : `$${stats.pendingSalaries.toLocaleString()}`}
+            {loading || isMinimalData ? 
+              <Skeleton className={`h-8 w-20 ${isMinimalData ? 'bg-gray-100' : ''}`} /> : 
+              formatCompactAmount(stats.pendingSalaries)
+            }
           </div>
           <div className="text-xs text-muted-foreground">
-            {loading ? <Skeleton className="h-4 w-28" /> : pendingSalariesText}
+            {loading || isMinimalData ? 
+              <Skeleton className={`h-4 w-28 ${isMinimalData ? 'bg-gray-100' : ''}`} /> : 
+              pendingSalariesText
+            }
           </div>
         </CardContent>
       </Card>

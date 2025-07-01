@@ -6,6 +6,8 @@ import type { DateRange } from "react-day-picker"
 import * as XLSX from "xlsx"
 import useSWR from "swr"
 import type { AttendanceStatus } from "@/lib/mock-data"
+import { adminFetcher, fetchWithCSRF } from "@/lib/admin-api-client"
+import { getAvatarImage, getAvatarInitials } from "@/lib/avatar-utils"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -149,10 +151,7 @@ export function AdminAttendanceContent() {
   const [editConfirmDialogOpen, setEditConfirmDialogOpen] = useState(false);
   const [formDataToConfirm, setFormDataToConfirm] = useState<any>(null);
 
-  const fetcher = (url: string) => fetch(url).then(res => {
-    if (!res.ok) throw new Error("Failed to fetch attendance records");
-    return res.json();
-  });
+  // Using the CSRF-protected adminFetcher instead of a custom fetcher
 
   // Today's date string (YYYY-MM-DD) in local time
   const today = new Date();
@@ -187,8 +186,8 @@ export function AdminAttendanceContent() {
   const todayKey = `/api/admin/attendance?${todayParams.toString()}`;
   const historyKey = `/api/admin/attendance?${historyParams.toString()}`;
 
-  const { data: todayData, isLoading: todayLoading, mutate: mutateToday } = useSWR(todayKey, fetcher);
-  const { data: historyData, error: swrError, isLoading, mutate } = useSWR(historyKey, fetcher);
+  const { data: todayData, isLoading: todayLoading, mutate: mutateToday } = useSWR(todayKey, adminFetcher);
+  const { data: historyData, error: swrError, isLoading, mutate } = useSWR(historyKey, adminFetcher);
 
   useEffect(() => {
     if (historyData) {
@@ -592,50 +591,52 @@ export function AdminAttendanceContent() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 ml-8">
       {/* Dashboard Cards always at the top */}
+      <div className="sticky top-0 z-20 bg-white rounded-b shadow pb-4 mb-2 mx-6 my-2 p-8">
           <h2 className="text-lg font-semibold mb-2">Today's Attendance Overview</h2>
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Records</CardTitle>
-            <Clock className="h-4 w-4 text-muted-foreground" />
+          <Card className="p-2">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 p-2">
+              <CardTitle className="text-xs font-medium">Total Records</CardTitle>
+              <Clock className="h-3 w-3 text-muted-foreground" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{todaysRecords.length}</div>
-            <p className="text-xs text-muted-foreground">Total attendance records</p>
+            <CardContent className="p-2 text-xs">
+              <div className="text-lg font-bold">{todaysRecords.length}</div>
+              <p className="text-[10px] text-muted-foreground">Total attendance records</p>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Present</CardTitle>
-            <CheckCircle className="h-4 w-4 text-green-500" />
+          <Card className="p-2">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 p-2">
+              <CardTitle className="text-xs font-medium">Present</CardTitle>
+              <CheckCircle className="h-3 w-3 text-green-500" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{presentCount}</div>
-            <p className="text-xs text-muted-foreground">Employees present</p>
+            <CardContent className="p-2 text-xs">
+              <div className="text-lg font-bold">{presentCount}</div>
+              <p className="text-[10px] text-muted-foreground">Employees present</p>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Late</CardTitle>
-            <Clock className="h-4 w-4 text-amber-500" />
+          <Card className="p-2">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 p-2">
+              <CardTitle className="text-xs font-medium">Late</CardTitle>
+              <Clock className="h-3 w-3 text-amber-500" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{lateCount}</div>
-            <p className="text-xs text-muted-foreground">Late arrivals</p>
+            <CardContent className="p-2 text-xs">
+              <div className="text-lg font-bold">{lateCount}</div>
+              <p className="text-[10px] text-muted-foreground">Late arrivals</p>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Absent</CardTitle>
-            <X className="h-4 w-4 text-red-500" />
+          <Card className="p-2">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 p-2">
+              <CardTitle className="text-xs font-medium">Absent</CardTitle>
+              <X className="h-3 w-3 text-red-500" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{absentCount}</div>
-            <p className="text-xs text-muted-foreground">Absent employees</p>
+            <CardContent className="p-2 text-xs">
+              <div className="text-lg font-bold">{absentCount}</div>
+              <p className="text-[10px] text-muted-foreground">Absent employees</p>
           </CardContent>
         </Card>
+        </div>
       </div>
       {/* Tabs for Today's Attendance and Attendance History */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -715,8 +716,13 @@ export function AdminAttendanceContent() {
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <Avatar className="h-8 w-8">
-                            <AvatarImage src={`/abstract-geometric-shapes.png?height=32&width=32&query=${record.employeeName}`} alt={record.employeeName} />
-                            <AvatarFallback>{record.employeeName.split(" ").map((n: string) => n[0]).join("")}</AvatarFallback>
+                            <AvatarImage 
+                              src={getAvatarImage({ 
+                                image: record.user?.image, 
+                                pictureUrl: record.employee?.pictureUrl 
+                              })} 
+                              alt={record.employeeName} 
+                            />
                           </Avatar>
                           <div className="font-medium cursor-pointer hover:text-primary transition-colors" onClick={() => handleEmployeeClick(record)}>{record.employeeName}</div>
                         </div>
@@ -847,8 +853,13 @@ export function AdminAttendanceContent() {
                   <TableCell>
                     <div className="flex items-center gap-3">
                       <Avatar className="h-8 w-8">
-                                <AvatarImage src={`/abstract-geometric-shapes.png?height=32&width=32&query=${record.employeeName}`} alt={record.employeeName} />
-                                <AvatarFallback>{record.employeeName.split(" ").map((n: string) => n[0]).join("")}</AvatarFallback>
+                                <AvatarImage 
+                                  src={getAvatarImage({ 
+                                    image: record.user?.image, 
+                                    pictureUrl: record.employee?.pictureUrl 
+                                  })} 
+                                  alt={record.employeeName} 
+                                />
                       </Avatar>
                               <div className="font-medium cursor-pointer hover:text-primary transition-colors" onClick={() => handleEmployeeClick(record)}>{record.employeeName}</div>
                     </div>
@@ -922,15 +933,13 @@ export function AdminAttendanceContent() {
                   <div className="flex items-center gap-4">
                     <Avatar className="h-16 w-16">
                       <AvatarImage
-                        src={`/abstract-geometric-shapes.png?height=64&width=64&query=${selectedEmployee.employeeName}`}
+                        src={getAvatarImage({ 
+                          image: selectedEmployee.user?.image, 
+                          pictureUrl: selectedEmployee.employee?.pictureUrl 
+                        })}
                         alt={selectedEmployee.employeeName}
                       />
-                      <AvatarFallback>
-                        {selectedEmployee.employeeName
-                          .split(" ")
-                          .map((n: string) => n[0])
-                          .join("")}
-                      </AvatarFallback>
+                      <AvatarFallback>{getAvatarInitials(selectedEmployee.employeeName)}</AvatarFallback>
                     </Avatar>
                     <div>
                       <p className="text-sm font-medium leading-none">{selectedEmployee.employeeName}</p>

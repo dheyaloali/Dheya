@@ -29,12 +29,35 @@ interface RateLimitOptions {
 }
 
 /**
+ * Get the maximum login attempts from localStorage or use the default
+ */
+export function getMaxLoginAttempts(): number {
+  if (typeof window === 'undefined') return 5;
+  
+  const savedAttempts = localStorage.getItem('max_login_attempts');
+  if (!savedAttempts) return 5;
+  
+  if (savedAttempts === 'unlimited') return 1000; // Effectively unlimited
+  
+  const attempts = parseInt(savedAttempts, 10);
+  return isNaN(attempts) ? 5 : attempts;
+}
+
+/**
  * Checks if the given key (e.g., IP) is rate limited.
  * Returns true if allowed, false if rate limited.
  */
 export function checkRateLimit(key: string, options: RateLimitOptions): boolean {
   const now = Date.now()
   const entry = rateLimitMap.get(key)
+  
+  // For login attempts, use the value from localStorage if this is a login attempt
+  // We assume login attempts have a 60_000 ms window
+  if (options.windowMs === 60_000 && options.max === 5) {
+    // This is likely a login attempt check, so use the configured max attempts
+    options.max = getMaxLoginAttempts();
+  }
+  
   if (!entry || now - entry.lastRequest > options.windowMs) {
     // New window
     rateLimitMap.set(key, { count: 1, lastRequest: now })

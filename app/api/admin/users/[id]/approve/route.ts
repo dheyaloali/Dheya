@@ -31,4 +31,4 @@ export async function POST(
     console.error("[USER_APPROVE]", error)
     return new NextResponse("Internal Error", { status: 500 })
   }
-} 
+}

@@ -71,20 +71,17 @@ export async function POST(req: NextRequest) {
   try {
     const data = await req.json();
 
-    // Check if email already exists (case-insensitive)
+    // Combined uniqueness check for email and name (case-insensitive)
     const existingUser = await prisma.user.findFirst({
-      where: { email: data.email },
+      where: {
+        OR: [
+          { email: { equals: data.email, mode: 'insensitive' } },
+          { name: { equals: data.name, mode: 'insensitive' } }
+        ]
+      }
     });
     if (existingUser) {
-      return NextResponse.json({ error: "Email already exists" }, { status: 400 });
-    }
-
-    // Check if name already exists (case-insensitive)
-    const existingName = await prisma.user.findFirst({
-      where: { name: data.name },
-    });
-    if (existingName) {
-      return NextResponse.json({ error: "Name already exists" }, { status: 400 });
+      return NextResponse.json({ error: "Email or name already exists" }, { status: 400 });
     }
 
     // Validate phone number
@@ -92,31 +89,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Phone number must be provided in Indonesian format: +62xxxxxxxxxxx" }, { status: 400 });
     }
 
-    // Create user
-    const user = await prisma.user.create({
-      data: {
-        name: data.name,
-        email: data.email,
-        password: Math.random().toString(36).slice(-8),
-        role: "employee",
-        status: (data.status && data.status.toLowerCase() === "inactive") ? "inactive" : "active",
-        phoneNumber: data.phoneNumber.trim(),
-      },
+    // Use a transaction to create user and employee atomically
+    const result = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          name: data.name,
+          email: data.email,
+          password: Math.random().toString(36).slice(-8),
+          role: "employee",
+          status: (data.status && data.status.toLowerCase() === "inactive") ? "inactive" : "active",
+          phoneNumber: data.phoneNumber.trim(),
+        },
+      });
+
+      const employee = await tx.employee.create({
+        data: {
+          userId: user.id,
+          city: data.city,
+          position: data.position,
+          joinDate: data.startDate ? new Date(data.startDate) : new Date(),
+        },
+      });
+
+      return { user, employee };
     });
 
-    // Create employee (no status field)
-    const employee = await prisma.employee.create({
-      data: {
-        userId: user.id,
-        city: data.city,
-        position: data.position,
-        joinDate: data.startDate ? new Date(data.startDate) : new Date(),
-      },
-    });
-
-    return NextResponse.json({ employee });
+    return NextResponse.json({ employee: result.employee });
   } catch (error) {
-    console.error(error);
     return NextResponse.json({ error: "Failed to create employee" }, { status: 500 });
   }
 } 

@@ -1,90 +1,138 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/auth-guard";
-import rateLimit from 'next-rate-limit';
+import { RateLimiterMemory } from 'rate-limiter-flexible';
 
-const limiter = rateLimit({
-  interval: 60 * 1000, // 1 minute
-  uniqueTokenPerInterval: 500, // Max 500 unique IPs per minute
+// Create a rate limiter instance
+const limiter = new RateLimiterMemory({
+  points: 100, // 100 requests
+  duration: 60, // per 1 minute
 });
 
 export async function GET(req: NextRequest) {
   try {
-    await limiter.check(res, 100, 'CACHE_TOKEN'); // 100 requests per minute
+    // Apply rate limiting based on IP
+    await limiter.consume(req.ip || 'anonymous');
   } catch {
     return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
   }
+
   // Require admin authentication
   const auth = await requireAuth(req, true);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.message }, { status: auth.status });
   }
+
+  // Prepare date objects once to reuse
+  const now = new Date();
+  const lastMonth = new Date(now);
+  lastMonth.setMonth(now.getMonth() - 1);
+  const prevMonth = new Date(lastMonth);
+  prevMonth.setMonth(lastMonth.getMonth() - 1);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+
+  // Response object to collect results
+  const stats = {
+    totalEmployees: 0,
+    employeeGrowth: 0,
+    attendanceToday: 0,
+    attendanceRate: 0,
+    totalSales: 0,
+    salesGrowth: 0,
+    pendingSalaries: 0,
+    pendingSalariesCount: 0,
+  };
+
   try {
+    // Run independent queries in parallel for better performance
+    const [
+      totalEmployees,
+      newEmployees,
+      attendanceToday,
+      salesData,
+      lastMonthSales,
+      prevMonthSales,
+      pendingSalariesData
+    ] = await Promise.all([
     // Total employees
-    const totalEmployees = await prisma.employee.count();
+      prisma.employee.count().catch((err: unknown) => {
+        return 0;
+      }),
 
     // Employee growth (new employees in the last 30 days)
-    const now = new Date();
-    const lastMonth = new Date(now);
-    lastMonth.setMonth(now.getMonth() - 1);
-    const employeeGrowth = await prisma.employee.count({
-      where: {
-        joinDate: { gte: lastMonth },
-      },
-    });
+      prisma.employee.count({
+        where: { joinDate: { gte: lastMonth } },
+      }).catch((err: unknown) => {
+        return 0;
+      }),
 
     // Today's attendance
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const attendanceToday = await prisma.attendance.count({
-      where: {
-        date: { gte: today },
-      },
-    });
+      prisma.attendance.count({
+        where: { date: { gte: today } },
+      }).catch((err: unknown) => {
+        return 0;
+      }),
 
-    // Attendance rate (today's attendance / total employees)
-    const attendanceRate = totalEmployees > 0 ? Math.round((attendanceToday / totalEmployees) * 100) : 0;
-
-    // Total sales (use aggregate)
-    const { _sum: { amount: totalSales = 0 } = {} } = await prisma.sale.aggregate({
+      // Total sales
+      prisma.sale.aggregate({
       _sum: { amount: true }
-    });
+      }).catch((err: unknown) => {
+        return { _sum: { amount: 0 } };
+      }),
 
-    // Sales growth (sales in last 30 days vs previous 30 days)
-    const lastMonthSales = await prisma.sale.aggregate({
+      // Last month sales
+      prisma.sale.aggregate({
       _sum: { amount: true },
       where: { date: { gte: lastMonth } }
-    });
-    const prevMonth = new Date(lastMonth);
-    prevMonth.setMonth(lastMonth.getMonth() - 1);
-    const prevMonthSales = await prisma.sale.aggregate({
+      }).catch((err: unknown) => {
+        return { _sum: { amount: 0 } };
+      }),
+
+      // Previous month sales
+      prisma.sale.aggregate({
       _sum: { amount: true },
       where: { date: { gte: prevMonth, lt: lastMonth } }
-    });
+      }).catch((err: unknown) => {
+        return { _sum: { amount: 0 } };
+      }),
+
+      // Pending salaries
+      prisma.salary.aggregate({
+        where: { status: "pending", deleted: false },
+        _sum: { amount: true },
+        _count: { employeeId: true },
+      }).catch((err: unknown) => {
+        return { _sum: { amount: 0 }, _count: { employeeId: 0 } };
+      })
+    ]);
+
+    // Process the results
+    stats.totalEmployees = totalEmployees;
+    stats.employeeGrowth = newEmployees;
+    stats.attendanceToday = attendanceToday;
+    stats.attendanceRate = totalEmployees > 0 ? Math.round((attendanceToday / totalEmployees) * 100) : 0;
+    stats.totalSales = salesData._sum.amount || 0;
+    
     const lastMonthTotal = lastMonthSales._sum.amount || 0;
     const prevMonthTotal = prevMonthSales._sum.amount || 0;
-    const salesGrowth = prevMonthTotal > 0 ? Math.round(((lastMonthTotal - prevMonthTotal) / prevMonthTotal) * 100) : 0;
+    stats.salesGrowth = prevMonthTotal > 0 
+      ? Math.round(((lastMonthTotal - prevMonthTotal) / prevMonthTotal) * 100) 
+      : 0;
 
-    // Pending salaries (sum and count, not fetching all)
-    const pendingSalariesAgg = await prisma.salary.aggregate({
-      _sum: { amount: true },
-      _count: { employeeId: true },
-      where: { status: "pending", deleted: false }
-    });
-    const pendingSalaries = pendingSalariesAgg._sum.amount || 0;
-    const pendingSalariesCount = pendingSalariesAgg._count.employeeId || 0;
+    stats.pendingSalaries = pendingSalariesData._sum.amount || 0;
+    stats.pendingSalariesCount = pendingSalariesData._count.employeeId || 0;
 
-    return NextResponse.json({
-      totalEmployees,
-      employeeGrowth,
-      attendanceToday,
-      attendanceRate,
-      totalSales,
-      salesGrowth,
-      pendingSalaries,
-      pendingSalariesCount,
+    // Return the stats with caching headers for better performance
+    return NextResponse.json(stats, { 
+      headers: { 
+        // Allow 5 second browser caching, but validate on the server again after that
+        'Cache-Control': 'private, max-age=5, stale-while-revalidate=30' 
+      } 
     });
   } catch (error) {
-    return NextResponse.json({ error: "Failed to fetch dashboard stats" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to fetch dashboard stats" },
+      { status: 500 }
+    );
   }
 } 

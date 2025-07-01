@@ -3,7 +3,10 @@ import useSWR from 'swr'
 const fetcher = (url: string) => fetch(url).then(res => res.json())
 
 export function useEmployeeSettings() {
-  const { data, error, isLoading, mutate } = useSWR('/api/employee/settings', fetcher)
+  const { data, error, isLoading, mutate } = useSWR('/api/employee/settings', fetcher, {
+    revalidateOnFocus: false,
+    revalidateOnMount: true,
+  })
 
   // Update settings (PUT)
   const updateSettings = async (updates: Partial<{ language: string }>) => {

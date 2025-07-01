@@ -30,7 +30,7 @@ export async function PUT(
     
     // Parse and validate the request body
     const body = await req.json();
-    
+
     // Validate status value
     if (body.status && !['pending', 'approved', 'rejected'].includes(body.status)) {
       return NextResponse.json(
@@ -57,4 +57,4 @@ export async function PUT(
       { status: 500 }
     );
   }
-} 
+}

@@ -26,13 +26,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Employee not found' }, { status: 404 });
   }
   
-  // Create batch of location entries
-  const locationEntries = await Promise.all(
-    batchData.map(async (data) => {
-      const { latitude, longitude, accuracy, timestamp, batteryLevel, isMoving } = data;
-      
-      return prisma.employeeLocation.create({
-        data: {
+  try {
+    // Use createMany for better performance with batch operations
+    // This will ensure the composite index (employeeId, timestamp) is properly utilized
+    const createdLocations = await prisma.employeeLocation.createMany({
+      data: batchData.map(data => {
+        const { latitude, longitude, accuracy, timestamp, batteryLevel, isMoving } = data;
+        
+        return {
           employeeId: employee.id,
           latitude,
           longitude,
@@ -40,14 +41,21 @@ export async function POST(request: Request) {
           timestamp: timestamp ? new Date(timestamp) : new Date(),
           batteryLevel: batteryLevel || null,
           isMoving: isMoving || true,
-        },
-      });
-    })
-  );
-  
-  return NextResponse.json({ 
-    success: true, 
-    count: locationEntries.length,
-    message: `${locationEntries.length} location entries saved successfully` 
-  });
+        };
+      }),
+      skipDuplicates: true, // Skip any potential duplicates based on unique constraints
+    });
+    
+    return NextResponse.json({ 
+      success: true, 
+      count: createdLocations.count,
+      message: `${createdLocations.count} location entries saved successfully` 
+    });
+  } catch (error) {
+    console.error('Error saving batch location data:', error);
+    return NextResponse.json({ 
+      success: false, 
+      error: 'Failed to save location data' 
+    }, { status: 500 });
+  }
 }

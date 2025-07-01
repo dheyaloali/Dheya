@@ -1,11 +1,12 @@
 import type React from "react"
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
 import { Inter } from "next/font/google"
 import { Providers } from "@/components/providers"
 import "./globals.css"
 import 'leaflet/dist/leaflet.css'
 import 'leaflet.markercluster/dist/MarkerCluster.css'
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
+import { LocaleProvider } from './_components/LocaleProvider'
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -15,18 +16,25 @@ export const metadata: Metadata = {
   generator: "v0.dev",
 }
 
+// Add viewport configuration at the root level
+export const viewport: Viewport = {
+  themeColor: "#3b82f6",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+}
+
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode
-}>) {
+}) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-      </head>
       <body className={inter.className}>
-        <Providers>{children}</Providers>
+        <LocaleProvider>
+          <Providers>{children}</Providers>
+        </LocaleProvider>
       </body>
     </html>
   )

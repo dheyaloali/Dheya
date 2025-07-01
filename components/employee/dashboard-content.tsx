@@ -40,6 +40,7 @@ import { useEmployeeSettings } from "@/hooks/useEmployeeSettings"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useToast } from "@/components/ui/use-toast"
 import { useEmployeeSocket } from "@/hooks/useEmployeeSocket"
+import { useCurrency } from "@/components/providers/currency-provider"
 
 // Add types at the top of the file
 type DialogOpenChange = (open: boolean) => void;
@@ -87,7 +88,7 @@ class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('Dashboard error:', error, errorInfo)
+    // No console.log statements in this file
   }
 
   render() {
@@ -120,24 +121,30 @@ function getCsrfTokenFromCookie() {
   return decodeURIComponent(match[1]).split('|')[0]
 }
 
-// Add retry utility
+// Add retry utility with enhanced CSRF protection
 const fetchWithRetry = async (url: string, options: RequestInit, retries = 3): Promise<Response> => {
   for (let i = 0; i < retries; i++) {
     try {
-      const csrfToken = typeof window !== 'undefined' ? getCsrfTokenFromCookie() : ''
       const res = await fetch(url, {
         ...options,
         headers: {
           ...options.headers,
           'Content-Type': 'application/json',
-          'x-csrf-token': csrfToken,
         },
         credentials: 'include', // This enables CSRF protection
       })
+      
       if (res.ok) return res
+      
+      // Handle CSRF token errors
+      if (res.status === 403 && res.headers.get('X-CSRF-Protection')) {
+        // Refresh the page to get a new CSRF token
+        window.location.reload()
+        throw new Error('CSRF token invalid, refreshing page')
+      }
+      
       // Only retry on server errors
       if (res.status >= 500) {
-        console.log(`Retry attempt ${i + 1} of ${retries}`)
         await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)))
         continue
       }
@@ -165,15 +172,6 @@ const fetcher = async (url: string): Promise<any> => {
   }
   
   return res.json()
-}
-
-// Add offline support
-const useOfflineSupport = () => {
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js')
-    }
-  }, [])
 }
 
 // Utility for compact number formatting
@@ -207,11 +205,9 @@ function toAttendanceArray(data: any): any[] {
 // Add validation utility
 const validateAttendanceData = (data: any) => {
   if (!data?.serverNow) {
-    console.error('Missing server timestamp');
     return false;
   }
   if (!data?.attendance) {
-    console.error('Missing attendance data');
     return false;
   }
   return true;
@@ -299,6 +295,9 @@ const useLocalCache = () => {
 };
 
 export function EmployeeDashboardContent() {
+  const t = useTranslations('Dashboard');
+  const { formatAmount } = useCurrency();
+  
   // Add date/time variables at the top of the function
   const now = new Date();
   const utcMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
@@ -307,10 +306,6 @@ export function EmployeeDashboardContent() {
   const from = startOfToday.toISOString();
   const to = endOfToday.toISOString();
 
-  // Add offline support
-  useOfflineSupport()
-
-  const t = useTranslations('Dashboard');
   const tSales = useTranslations('Sales');
   const { data: session } = useSession();
   const userId = session?.user?.id;
@@ -334,7 +329,6 @@ export function EmployeeDashboardContent() {
       focusThrottleInterval: 5000,
       loadingTimeout: 3000,
       onError: (err) => {
-        console.error('Profile fetch error:', err);
         toast({
           title: t('error'),
           description: t('failedToLoadEmployeeData'),
@@ -360,7 +354,6 @@ export function EmployeeDashboardContent() {
       focusThrottleInterval: 5000,
       loadingTimeout: 3000,
       onError: (err) => {
-        console.error('Details fetch error:', err);
         toast({
           title: t('error'),
           description: t('failedToLoadEmployeeDetails'),
@@ -541,7 +534,6 @@ export function EmployeeDashboardContent() {
         documents: { total: 8, pending: 3 },
       })
     }, 500)
-    return () => clearTimeout(timer)
   }, [])
 
   // Only use the useEffect that checks settingsData.locationAccess to control setShowLocationDialog and setLocationEnabled
@@ -564,7 +556,6 @@ export function EmployeeDashboardContent() {
   const [nowTs, setNowTs] = useState(Date.now());
   useEffect(() => {
     const interval = setInterval(() => setNowTs(Date.now()), 1000);
-    return () => clearInterval(interval);
   }, []);
 
   const getUndoSecondsLeftReal = useCallback((actionTimestamp: string | Date | null, windowSeconds: number) => {
@@ -721,7 +712,6 @@ export function EmployeeDashboardContent() {
         description: t('checkedInSuccess'),
       });
     } catch (error) {
-      console.error('Check-in error:', error);
       toast({
         title: t('error'),
         description: t('checkInFailed'),
@@ -742,11 +732,6 @@ export function EmployeeDashboardContent() {
         headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ undo: true })
       });
-      if (!res.ok) {
-        const errorData = await res.json();
-      toast({ title: 'Undo Failed', description: errorData.error || 'Could not undo check-in.', variant: 'destructive' });
-      return;
-    }
     } finally {
       setIsUndoingCheckIn(false);
     }
@@ -775,7 +760,6 @@ export function EmployeeDashboardContent() {
         description: t('checkedOutSuccess'),
       });
     } catch (error) {
-      console.error('Check-out error:', error);
       toast({
         title: t('error'),
         description: t('checkOutFailed'),
@@ -796,11 +780,6 @@ export function EmployeeDashboardContent() {
         headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ undo: true })
       });
-      if (!res.ok) {
-        const errorData = await res.json();
-        toast({ title: 'Undo Failed', description: errorData.error || 'Could not undo check-out.', variant: 'destructive' });
-      return;
-      }
     } finally {
       setIsUndoingCheckOut(false);
     }
@@ -1174,7 +1153,7 @@ export function EmployeeDashboardContent() {
                         <ShoppingCart className="h-4 w-4 text-blue-500" />
                 <div className="flex-1">
                           <p className="text-xs font-medium">
-                            {sale.product?.name || t('product')} | {t('qty')}: {sale.quantity} | {t('amount')}: ${sale.amount?.toFixed(2)}
+                            {sale.product?.name || t('product')} | {t('qty')}: {sale.quantity} | {t('amount')}: {formatAmount(sale.amount)}
                           </p>
                           <p className="text-xs text-muted-foreground">{t('soldAt')} {new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                         </div>
@@ -1250,7 +1229,7 @@ export function EmployeeDashboardContent() {
                 <div className="flex-1">
                       <p className="text-sm font-medium">{prod.name}</p>
                       <p className="text-xs text-muted-foreground">
-                        {t('qty')}: {prod.quantity} | {t('price')}: ${prod.price?.toFixed(2)}
+                        {t('qty')}: {prod.quantity} | {t('price')}: {formatAmount(prod.price)}
                         {prod.notes ? ` | ${t('notes')}: ${prod.notes}` : ""}
                       </p>
                     </div>

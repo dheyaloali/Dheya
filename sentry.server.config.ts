@@ -1,11 +1,32 @@
-// This file configures the initialization of Sentry on the server.
-// The config you add here will be used whenever the server handles a request.
-// https://docs.sentry.io/platforms/javascript/guides/nextjs/
+// Disabled Sentry for Capacitor compatibility
+// This is a no-op implementation
 
-import * as Sentry from "@sentry/nextjs";
+export const captureException = () => {};
+export const captureMessage = () => {};
+export const captureEvent = () => {};
+export const startSpan = () => ({
+  end: () => {},
+  setName: () => {},
+  setData: () => {},
+});
+export const init = () => {};
+export const flush = async () => true;
+export const close = async () => true;
+export const withScope = (callback: any) => callback({ setTag: () => {}, setExtra: () => {} });
+export const configureScope = () => {};
 
-Sentry.init({
-  dsn: "https://00a537677c0859e75ecc1dc6904415b0@o4509484638076928.ingest.us.sentry.io/4509484645679104",
+// Export a dummy object for any other imports
+export default {
+  init: () => {},
+  captureException: () => {},
+  captureMessage: () => {},
+  captureEvent: () => {},
+  startSpan: () => ({
+    end: () => {},
+    setName: () => {},
+    setData: () => {},
+  }),
+};
 
   // Define how likely traces are sampled. Adjust this value in production, or use tracesSampler for greater control.
   tracesSampleRate: 1,

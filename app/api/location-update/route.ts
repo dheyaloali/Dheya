@@ -27,15 +27,30 @@ export async function POST(request: Request) {
   
   // Server-side reverse geocoding with caching
   let address: string | null = null;
+  
+  // Use the composite index (employeeId, timestamp) for efficient query
+  // First check if we already have an address for this location from this employee
   const existing = await prisma.employeeLocation.findFirst({
-    where: { latitude, longitude, address: { not: null } },
+    where: { 
+      employeeId: employee.id,
+      latitude, 
+      longitude, 
+      address: { not: null } 
+    },
+    orderBy: {
+      timestamp: 'desc'
+    },
     select: { address: true }
   });
+  
   if (existing?.address) {
     address = existing.address;
   } else {
     address = await reverseGeocode(latitude, longitude);
   }
+  
+  // Create a timestamp for consistency
+  const timestamp = new Date();
   
   const location = await prisma.employeeLocation.create({
     data: {
@@ -46,6 +61,7 @@ export async function POST(request: Request) {
       batteryLevel: batteryLevel || null,
       isMoving: isMoving || true,
       address,
+      timestamp, // Explicitly set timestamp for index usage
     },
   });
   
@@ -61,9 +77,11 @@ export async function POST(request: Request) {
       batteryLevel: batteryLevel || null,
       isMoving: isMoving || true,
       address,
-      timestamp: location.createdAt,
+      timestamp: location.timestamp,
     }),
-  }).catch(() => {});
+  }).catch(error => {
+    console.error('Failed to broadcast location update:', error);
+  });
 
   return NextResponse.json(location);
 }

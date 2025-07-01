@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/use-toast"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { getAvatarImage, getAvatarInitials } from "@/lib/avatar-utils"
 
 interface PendingUser {
   id: string
@@ -21,6 +22,7 @@ interface PendingUser {
   employee?: {
     position: string
     city: string
+    pictureUrl?: string
   }
 }
 
@@ -84,12 +86,14 @@ export function PendingUsers({ users }: { users: PendingUser[] }) {
             >
               <div className="flex items-center space-x-4">
                 <Avatar>
-                  <AvatarImage src={user.image} />
+                  <AvatarImage 
+                    src={getAvatarImage({ 
+                      image: user.image, 
+                      pictureUrl: user.employee?.pictureUrl 
+                    })} 
+                  />
                   <AvatarFallback>
-                    {user.name
-                      ?.split(" ")
-                      .map((n) => n[0])
-                      .join("")}
+                    {getAvatarInitials(user.name)}
                   </AvatarFallback>
                 </Avatar>
                 <div>

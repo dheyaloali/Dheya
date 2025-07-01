@@ -7,6 +7,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/use-toast";
 import { LoadingButton } from "@/components/ui/loading-button";
+import { adminFetcher, fetchWithCSRF } from "@/lib/admin-api-client";
+import { CheckCircle, XCircle, AlertCircle } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const PAGE_SIZE_OPTIONS = [5, 10, 20, 25, 50, 100];
 
@@ -28,11 +31,12 @@ export default function DocumentDeleteRequestsTable() {
   const [isBulkRejecting, setIsBulkRejecting] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [batchResults, setBatchResults] = useState<{ id: number, status: string, error?: string }[]>([]);
 
   // Fetch delete requests with pagination
   const { data, error, isLoading, mutate } = useSWR(
     `/api/admin/documents/delete-requests?page=${page}&limit=${pageSize}`,
-    url => fetch(url).then(res => res.json())
+    adminFetcher
   );
   const requests = data?.requests || [];
   const total = data?.total || requests.length;
@@ -48,13 +52,18 @@ export default function DocumentDeleteRequestsTable() {
     setIsBulkApproving(true);
     setActionError(null);
     try {
-      for (const id of selected) {
-        await handleAction(id, "approve");
-      }
+      const res = await fetch("/api/admin/documents/delete-requests/batch", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: selected, action: "approve" }),
+      });
+      const data = await res.json();
+      setBatchResults(data.results || []);
+      if (!res.ok) throw new Error(data.error || "Failed to approve requests");
       setSelected([]);
       await mutate();
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Failed to approve requests");
+    } catch (error: any) {
+      setActionError(error.message || "Failed to approve requests");
     } finally {
       setIsBulkApproving(false);
     }
@@ -64,13 +73,18 @@ export default function DocumentDeleteRequestsTable() {
     setIsBulkDeleting(true);
     setActionError(null);
     try {
-      for (const id of selected) {
-        await handleDelete(id);
-      }
+      const res = await fetch("/api/admin/documents/delete-requests/batch", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: selected }),
+      });
+      const data = await res.json();
+      setBatchResults(data.results || []);
+      if (!res.ok) throw new Error(data.error || "Failed to delete requests");
       setSelected([]);
       await mutate();
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Failed to delete requests");
+    } catch (error: any) {
+      setActionError(error.message || "Failed to delete requests");
     } finally {
       setIsBulkDeleting(false);
     }
@@ -102,13 +116,8 @@ export default function DocumentDeleteRequestsTable() {
         description: "Please wait...",
       });
       
-      const res = await fetch(`/api/admin/documents/delete-requests/${id}`, {
+      const res = await fetchWithCSRF(`/api/admin/documents/delete-requests/${id}`, {
         method: "PATCH",
-        headers: { 
-          "Content-Type": "application/json",
-          "Cache-Control": "no-cache",
-          "Pragma": "no-cache"
-        },
         body: JSON.stringify({ action, reason }),
       });
       
@@ -140,12 +149,8 @@ export default function DocumentDeleteRequestsTable() {
         description: "Please wait...",
       });
       
-      const res = await fetch(`/api/admin/documents/delete-requests/${id}`, { 
-        method: "DELETE",
-        headers: { 
-          "Cache-Control": "no-cache",
-          "Pragma": "no-cache"
-        }
+      const res = await fetchWithCSRF(`/api/admin/documents/delete-requests/${id}`, { 
+        method: "DELETE"
       });
       
       if (!res.ok) throw new Error("Failed to delete request");
@@ -170,22 +175,31 @@ export default function DocumentDeleteRequestsTable() {
     setIsBulkRejecting(true);
     setActionError(null);
     try {
-      for (const id of rejectingIds) {
-        await handleAction(id, "reject", rejectionReason);
-      }
+      const res = await fetch("/api/admin/documents/delete-requests/batch", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: rejectingIds, action: "reject", reason: rejectionReason }),
+      });
+      const data = await res.json();
+      setBatchResults(data.results || []);
+      if (!res.ok) throw new Error(data.error || "Failed to reject requests");
       setRejectingIds([]);
       setShowRejectDialog(false);
       setRejectionReason("");
       setSelected([]);
       await mutate();
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Failed to reject requests");
+    } catch (error: any) {
+      setActionError(error.message || "Failed to reject requests");
     } finally {
       setIsBulkRejecting(false);
     }
   };
 
+  // Helper to get batch result for a row
+  const getBatchResult = (id: number) => batchResults.find(r => r.id === id);
+
   return (
+    <TooltipProvider>
     <div className="space-y-4">
       <div className="bg-white rounded-lg border shadow-sm p-4">
         <div className="flex items-center justify-between mb-4">
@@ -238,10 +252,40 @@ export default function DocumentDeleteRequestsTable() {
                 <TableRow><TableCell colSpan={8} className="text-red-500">Error loading requests: {error.message || String(error)}</TableCell></TableRow>
               ) : requests.length === 0 ? (
                 <TableRow><TableCell colSpan={8}>No delete requests found</TableCell></TableRow>
-              ) : requests.map((req: any) => (
-                <TableRow key={req.id}>
+                ) : requests.map((req: any) => {
+                  const batchResult = getBatchResult(req.id);
+                  const isError = batchResult?.status === "error";
+                  const isSuccess = batchResult && batchResult.status !== "error";
+                  return (
+                    <TableRow
+                      key={req.id}
+                      className={isError ? "bg-red-50" : isSuccess ? "bg-green-50" : ""}
+                    >
                   <TableCell><Checkbox checked={selected.includes(req.id)} onCheckedChange={() => toggleSelect(req.id)} /></TableCell>
-                  <TableCell>{req.document?.title || "-"}</TableCell>
+                      <TableCell className="flex items-center gap-2">
+                        {batchResult ? (
+                          batchResult.status === "error" ? (
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <XCircle className="h-5 w-5 text-red-500" />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{batchResult.error || "Error"}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <CheckCircle className="h-5 w-5 text-green-500" />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Success</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )
+                        ) : null}
+                        {req.document?.title || "-"}
+                      </TableCell>
                   <TableCell>{req.employee?.user?.name || "-"}</TableCell>
                   <TableCell className="max-w-xs truncate" title={req.reason}>{req.reason}</TableCell>
                   <TableCell>{req.status}</TableCell>
@@ -279,7 +323,8 @@ export default function DocumentDeleteRequestsTable() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                  );
+                })}
             </TableBody>
           </Table>
         </div>
@@ -341,5 +386,6 @@ export default function DocumentDeleteRequestsTable() {
         </DialogContent>
       </Dialog>
     </div>
+    </TooltipProvider>
   );
 } 

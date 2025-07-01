@@ -211,15 +211,6 @@ export function EmployeeDocumentsContent() {
       </div>
     );
   }
-  // If employee is not found, show a friendly message and disable upload
-  if (!employee) {
-    return (
-      <div className="w-full p-4 md:p-6 pb-20 pt-4 md:pt-0 text-center text-muted-foreground">
-        <p className="mb-4">{t('settingUpProfile')}</p>
-        <Skeleton className="h-10 w-40 rounded mx-auto" />
-      </div>
-    );
-  }
 
   return (
     <div className="w-full p-4 md:p-6 pb-20 pt-4 md:pt-0">

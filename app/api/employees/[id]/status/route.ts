@@ -53,4 +53,4 @@ export async function PATCH(req: NextRequest, context: any) {
   } catch (error) {
     return NextResponse.json({ error: "Failed to update status" }, { status: 500 });
   }
-} 
+}

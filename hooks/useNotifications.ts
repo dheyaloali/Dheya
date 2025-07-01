@@ -217,10 +217,30 @@ export function useNotifications(pageSize = 20) {
     }
   };
 
-  const loadMore = () => {
+  const loadMore = async () => {
     if (hasMore && !isValidating) {
-      setPage((p) => p + 1);
+      const nextPage = page + 1;
+      setPage(nextPage);
+      
+      try {
+        // Manually fetch the next page
+        const response = await fetch(`/api/notifications?skip=${nextPage * pageSize}&take=${pageSize}`);
+        if (!response.ok) throw new Error('Failed to fetch more notifications');
+        
+        const newData = await response.json();
+        const newNotifications = Array.isArray(newData) ? newData : newData?.notifications || [];
+        
+        // Update accumulated with new data
+        setAccumulated(prev => [...prev, ...newNotifications]);
+        
+        // Return true if there are more pages to load
+        return newNotifications.length === pageSize;
+      } catch (error) {
+        console.error("[useNotifications] Error loading more notifications:", error);
+        return false;
+      }
     }
+    return false;
   };
 
   const reset = () => {

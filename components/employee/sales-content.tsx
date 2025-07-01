@@ -17,18 +17,12 @@ import * as XLSX from 'xlsx'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select"
 import { PaginationControls } from "@/components/pagination-controls"
 import { useTranslations } from "next-intl"
+import { useCurrency } from "@/components/providers/currency-provider"
 
 const fetcher = (url: string) => fetch(url).then(res => res.json())
 
-// Add a utility function for compact currency formatting:
-function formatCompactCurrency(value: number | undefined) {
-  if (value == null) return '-';
-  return value >= 1000
-    ? `$${Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value)}`
-    : `$${value}`;
-}
-
 export function EmployeeSalesContent() {
+  const { formatCompactAmount } = useCurrency();
   const t = useTranslations('Sales');
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState<number>(now.getMonth());
@@ -210,17 +204,15 @@ export function EmployeeSalesContent() {
                   {isLoading ? (
                     <Skeleton className="h-5 w-20" />
                   ) : (
-                    <span className="text-sm text-muted-foreground">{formatCompactCurrency(monthlySales)}</span>
+                    <span className="text-sm text-muted-foreground">{formatCompactAmount(monthlySales)}</span>
                   )}
                 </div>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-medium">{t('monthlyTarget')}</span>
                   {isLoading ? (
                     <Skeleton className="h-5 w-20" />
-                  ) : monthlyTarget == null ? (
-                    <span className="text-sm text-muted-foreground italic">{t('noTargetSet')}</span>
                   ) : (
-                    <span className="text-sm text-muted-foreground">{formatCompactCurrency(monthlyTarget)}</span>
+                    <span className="text-sm text-muted-foreground">{formatCompactAmount(monthlyTarget)}</span>
                   )}
                 </div>
                 {isLoading ? (
@@ -256,7 +248,7 @@ export function EmployeeSalesContent() {
                     <p>
                       {t('dailyAverage')}
                       <span className="font-medium">
-                        {formatCompactCurrency(Math.round(monthlySales / new Date().getDate()))}
+                        {formatCompactAmount(Math.round(monthlySales / new Date().getDate()))}
                       </span>
                       .
                     </p>
@@ -293,7 +285,7 @@ export function EmployeeSalesContent() {
               <AreaChart data={cumulativeChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} />
-                <YAxis tickLine={false} axisLine={false} tickMargin={8} tickFormatter={formatCompactCurrency} />
+                <YAxis tickLine={false} axisLine={false} tickMargin={8} tickFormatter={formatCompactAmount} />
                     <Tooltip
                   content={({ active, payload, label }) => {
                     if (!active || !payload || !payload.length) return null;
@@ -310,8 +302,8 @@ export function EmployeeSalesContent() {
                         <div className="flex items-center gap-1 mb-2">
                           <span className="inline-flex items-center gap-1"><span role="img" aria-label="expired">❌</span> <b>{t('expired')}:</b> {data.expiredCount}</span>
                         </div>
-                        <div><b>{t('sales')}:</b> {formatCompactCurrency(data.sales)}</div>
-                        <div><b>{t('target')}:</b> {formatCompactCurrency(data.target)}</div>
+                        <div><b>{t('sales')}:</b> {formatCompactAmount(data.sales)}</div>
+                        <div><b>{t('target')}:</b> {formatCompactAmount(data.target)}</div>
                       </div>
                     );
                   }}
@@ -389,7 +381,7 @@ export function EmployeeSalesContent() {
                           </div>
                         </TableCell>
                         <TableCell>{sale.product?.description || '-'}</TableCell>
-                        <TableCell className="text-black">{formatCompactCurrency(sale.product?.price)}</TableCell>
+                        <TableCell className="text-black">{formatCompactAmount(sale.product?.price)}</TableCell>
                         <TableCell>
                           <span className="inline-block bg-blue-100 text-black px-3 py-1 text-xs rounded-md">
                             {sale.quantity || "-"}
@@ -405,7 +397,7 @@ export function EmployeeSalesContent() {
                             {sale.assignment?.status || '-'}
                           </span>
                         </TableCell>
-                        <TableCell className="text-black">{formatCompactCurrency(sale.amount)}</TableCell>
+                        <TableCell className="text-black">{formatCompactAmount(sale.amount)}</TableCell>
                         <TableCell>{format(new Date(sale.date), "MMM dd, yyyy")}</TableCell>
                       </TableRow>
                     ))}

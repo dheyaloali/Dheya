@@ -25,6 +25,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import NotificationPanel from "@/components/ui/NotificationPanel"
 import { AdminSocketProvider } from "@/components/admin/AdminSocketProvider"
+import { getAvatarImage, getAvatarInitials } from "@/lib/avatar-utils"
 
 const menuItems = [
   { label: "Dashboard", href: "/admin/dashboard", icon: <BarChart3 className="w-5 h-5" /> },
@@ -85,8 +86,14 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       {/* User Info */}
       <div className="flex items-center gap-3 px-6 py-2 mb-4">
         <Avatar className="h-10 w-10">
-          <AvatarImage src="/placeholder-user.png" alt={user?.name ?? "User"} />
-          <AvatarFallback>{user?.name?.split(" ").map(n => n[0]).join("") ?? "U"}</AvatarFallback>
+          <AvatarImage 
+            src={getAvatarImage({ 
+              image: user?.image, 
+              pictureUrl: user?.employee?.pictureUrl 
+            })} 
+            alt={user?.name ?? "User"} 
+          />
+          <AvatarFallback>{getAvatarInitials(user?.name)}</AvatarFallback>
         </Avatar>
         <div>
           <div className="font-semibold">{user?.name ?? "User"}</div>
@@ -170,6 +177,9 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       <main
         className="flex-1 min-w-0 pb-8 pt-4 transition-all duration-300 md:ml-64"
       >
+        <div className="flex justify-end items-center px-4 mb-2">
+          {/* CurrencySwitcher removed */}
+        </div>
         <AdminSocketProvider>
           {children}
         </AdminSocketProvider>

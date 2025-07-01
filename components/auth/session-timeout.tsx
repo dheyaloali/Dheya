@@ -11,7 +11,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { getCurrentUser, isAuthenticated, logout, SESSION_TIMEOUT, updateLastActive } from "@/lib/session-manager"
+import { getCurrentUser, isAuthenticated, logout, updateLastActive, getSessionTimeout } from "@/lib/session-manager"
 import { useTranslations } from "next-intl"
 
 // Time before showing warning (5 minutes before timeout)
@@ -36,9 +36,12 @@ export function SessionTimeoutHandler() {
       const user = getCurrentUser()
       if (!user || !user.lastActive) return
 
+      // Get the current session timeout from localStorage (or default)
+      const sessionTimeout = getSessionTimeout()
+
       const now = Date.now()
       const elapsed = now - user.lastActive
-      const remaining = SESSION_TIMEOUT - elapsed
+      const remaining = sessionTimeout - elapsed
 
       // If less than WARNING_BEFORE milliseconds remaining, show warning
       if (remaining <= WARNING_BEFORE) {
@@ -52,8 +55,9 @@ export function SessionTimeoutHandler() {
               if (prev <= 1) {
                 // Time's up, logout
                 clearInterval(id)
-                logout()
-                router.replace("/login")
+                logout().then(() => {
+                  router.replace("/login")
+                }).catch(console.error)
                 return 0
               }
               return prev - 1

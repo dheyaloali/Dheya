@@ -43,7 +43,6 @@ export async function POST(req: NextRequest) {
   if (totalWorkedHours !== undefined && (typeof totalWorkedHours !== 'number' || totalWorkedHours < 0)) validationErrors.push('Total worked hours must be a non-negative number.');
   if (absentDays !== undefined && (typeof absentDays !== 'number' || absentDays < 0)) validationErrors.push('Absent days must be a non-negative number.');
   if (validationErrors.length > 0) {
-    console.error('Salary correction validation error:', validationErrors);
     return NextResponse.json({ error: validationErrors.join(' ') }, { status: 400 });
   }
   // Calculate new salary
@@ -56,11 +55,9 @@ export async function POST(req: NextRequest) {
   const absenceDeductionTotal = absentDays * absenceDeduction;
   const totalSalary = baseSalary + bonus + overtimeBonus - undertimeDeductionTotal - absenceDeductionTotal;
   if (totalSalary < 0) {
-    console.error('Total salary is negative. Check input values.', { totalSalary, salaryId });
     return NextResponse.json({ error: 'Total salary cannot be negative. Please review the input values.' }, { status: 400 });
   }
-  // Mark original as corrected
-  await prisma.salary.update({ where: { id: salaryId }, data: { status: "corrected" } });
+  
   // Save calculation breakdown
   const breakdown = {
     baseSalary,
@@ -72,33 +69,45 @@ export async function POST(req: NextRequest) {
     absenceDeduction,
     absentDays,
   };
-  // Create correction
-  const newSalary = await prisma.salary.create({
-    data: {
-      employeeId: originalSalary.employeeId,
-      amount: totalSalary,
-      status: "paid",
-      payDate: originalSalary.payDate,
-      correctionOf: salaryId,
-      deleted: false,
-      metadata: breakdown, // Save all calculation fields in metadata
-      startDate: originalSalary.startDate,
-      endDate: originalSalary.endDate,
-    },
+  
+  // Use transaction for database operations
+  const newSalary = await prisma.$transaction(async (tx) => {
+    // Mark original as corrected
+    await tx.salary.update({ 
+      where: { id: salaryId }, 
+      data: { status: "corrected" } 
+    });
+    
+    // Create correction
+    const createdSalary = await tx.salary.create({
+      data: {
+        employeeId: originalSalary.employeeId,
+        amount: totalSalary,
+        status: "paid",
+        payDate: originalSalary.payDate,
+        correctionOf: salaryId,
+        deleted: false,
+        metadata: breakdown, // Save all calculation fields in metadata
+        startDate: originalSalary.startDate,
+        endDate: originalSalary.endDate,
+      },
+    });
+
+    // Audit log: log salary correction
+    await tx.salaryAuditLog.create({
+      data: {
+        salaryId: createdSalary.id,
+        action: 'correct',
+        oldValue: originalSalary,
+        newValue: createdSalary,
+        changedBy: auth.session?.user?.email ?? 'admin',
+      }
+    });
+    
+    return createdSalary;
   });
 
-  // Audit log: log salary correction
-  await prisma.salaryAuditLog.create({
-    data: {
-      salaryId: newSalary.id,
-      action: 'correct',
-      oldValue: originalSalary,
-      newValue: newSalary,
-      changedBy: auth.session?.user?.email ?? 'admin',
-    }
-  });
-
-  // Get admin info for notification
+  // Get admin info for notification - do this outside transaction
   const admin = await prisma.user.findFirst({ where: { role: "admin" } });
 
   // Notify employee
@@ -110,9 +119,10 @@ export async function POST(req: NextRequest) {
       actionUrl: "/employee/salary",
       actionLabel: "View Salary",
       broadcastToEmployee: true,
+      skipRealtime: true // Add skipRealtime flag to avoid errors when WS server is down
     });
   } catch (notifyErr) {
-    console.error("[Notification] Failed to notify employee of salary correction:", notifyErr);
+    // Empty catch block to match other routes
   }
 
   // Notify admin
@@ -125,13 +135,13 @@ export async function POST(req: NextRequest) {
         actionUrl: `/admin/salaries`,
         actionLabel: "View Salaries",
         broadcastToAdmin: true,
+        skipRealtime: true // Add skipRealtime flag to avoid errors when WS server is down
       });
     } catch (notifyErr) {
-      console.error("[Notification] Failed to notify admin of salary correction:", notifyErr);
+      // Empty catch block to match other routes
     }
   }
 
-  console.log(`Salary correction: originalId=${salaryId}, newId=${newSalary.id}, amount=${totalSalary}`);
   return NextResponse.json({
     originalSalary,
     correctedSalary: newSalary,

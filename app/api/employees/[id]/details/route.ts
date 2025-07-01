@@ -83,7 +83,7 @@ export async function PATCH(req: NextRequest, context: any) {
       const currentProductIds = currentAssignments.map((a: { productId: number }) => a.productId);
       const newProductIds = assignments.map((a: { productId: number }) => a.productId);
       const toDelete = currentAssignments.filter((a: { productId: number }) => !newProductIds.includes(a.productId));
-      
+
       // Delete assignments not in the new list
       if (toDelete.length > 0) {
         await tx.employeeProduct.deleteMany({ where: { id: { in: toDelete.map((a: { id: number }) => a.id) } } });
@@ -158,4 +158,4 @@ export async function PATCH(req: NextRequest, context: any) {
     console.error("PATCH /api/employees/[id]/details error:", error);
     return NextResponse.json({ error: "Failed to update product assignments" }, { status: 500 });
   }
-} 
+}

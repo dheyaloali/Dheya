@@ -12,12 +12,10 @@ export async function GET(request: Request) {
   
   try {
     const { searchParams } = new URL(request.url);
-    const timeframe = searchParams.get('timeframe') || 'current';
+    const timeframe = searchParams.get('timeframe') || 'today';
     const employeeId = searchParams.get('employeeId');
     const status = searchParams.get('status');
     const city = searchParams.get('city');
-    
-    console.log("[API] Fetching employee locations. Params:", { timeframe, employeeId, status, city });
     
     // Validate employeeId if provided
     if (employeeId && isNaN(parseInt(employeeId))) {
@@ -88,19 +86,18 @@ export async function GET(request: Request) {
       employeeFilter.city = city;
     }
     
-    console.log("[API] Query filters:", { employeeFilter, timeFilter });
+    // Add status filter if specified and not "all"
+    if (status && status !== 'all') {
+      employeeFilter.user = {
+        status: status.toUpperCase()
+      };
+    }
     
-    // First, get all employees with their most recent locations
+    // Optimize the query by using a more efficient approach
+    // First, get all employees based on filters
     const employees = await prisma.employee.findMany({
       where: employeeFilter,
       include: {
-        locations: {
-          where: timeFilter,
-          orderBy: {
-            timestamp: 'desc',
-          },
-          take: timeframe === 'current' ? 1 : undefined,
-        },
         user: {
           select: {
             name: true,
@@ -111,16 +108,64 @@ export async function GET(request: Request) {
       },
     });
     
-    console.log(`[API] Found ${employees.length} employees with ${employees.reduce((sum: number, emp: any) => sum + emp.locations.length, 0)} location entries`);
+    // Get employee IDs for location query
+    const employeeIds = employees.map(emp => emp.id);
     
-    // Filter by status if requested
-    let filteredEmployees = employees;
-    if (status && status !== 'all') {
-      filteredEmployees = employees.filter(emp => emp.user.status === status.toUpperCase());
+    // Then, use a separate optimized query to get the most recent locations
+    // This will leverage the composite index (employeeId, timestamp)
+    const locationsQuery = timeframe === 'current'
+      ? // For current timeframe, get only the most recent location per employee
+        Promise.all(employeeIds.map(async (empId) => {
+          return prisma.employeeLocation.findFirst({
+            where: {
+              employeeId: empId,
+              ...timeFilter
+            },
+            orderBy: {
+              timestamp: 'desc'
+            },
+          });
+        }))
+      : // For other timeframes, get all locations in the time range
+        prisma.employeeLocation.findMany({
+          where: {
+            employeeId: {
+              in: employeeIds
+            },
+            ...timeFilter
+          },
+          orderBy: {
+            timestamp: 'desc'
+          }
+        });
+    
+    // Execute the location query
+    const locations = await locationsQuery;
+    
+    // Create a map of employee ID to locations
+    const locationMap = new Map();
+    
+    if (timeframe === 'current') {
+      // For current timeframe, we have one location per employee (or null)
+      locations.forEach((loc) => {
+        if (loc) {
+          if (!locationMap.has(loc.employeeId)) {
+            locationMap.set(loc.employeeId, [loc]);
+          }
+        }
+      });
+    } else {
+      // For other timeframes, group locations by employee ID
+      (locations as any[]).forEach((loc) => {
+        if (!locationMap.has(loc.employeeId)) {
+          locationMap.set(loc.employeeId, []);
+        }
+        locationMap.get(loc.employeeId).push(loc);
+      });
     }
     
-    // Make sure each employee has the required structure for the UI
-    const mappedEmployees = filteredEmployees.map((emp: any) => {
+    // Map employees with their locations
+    const mappedEmployees = employees.map((emp) => {
       // Define a basic employee structure
       const employee = {
         id: emp.id.toString(),
@@ -135,8 +180,10 @@ export async function GET(request: Request) {
       };
       
       // Add location data if available
-      if (emp.locations && emp.locations.length > 0) {
-        const primaryLocation = emp.locations[0];
+      const employeeLocations = locationMap.get(emp.id) || [];
+      
+      if (employeeLocations.length > 0) {
+        const primaryLocation = employeeLocations[0];
         return {
           ...employee,
           location: {
@@ -145,7 +192,7 @@ export async function GET(request: Request) {
             timestamp: primaryLocation.timestamp.toISOString(),
           },
           batteryLevel: primaryLocation.batteryLevel || 0,
-          locations: emp.locations.map((loc: any) => ({
+          locations: employeeLocations.map((loc: any) => ({
             latitude: loc.latitude,
             longitude: loc.longitude,
             timestamp: loc.timestamp.toISOString(),
@@ -163,8 +210,6 @@ export async function GET(request: Request) {
       ? mappedEmployees.filter(emp => emp.location)
       : mappedEmployees;
     
-    console.log(`[API] Returning ${employeesWithLocation.length} employees with location data`);
-    
     // Return with cache control headers
     return NextResponse.json(employeesWithLocation, {
       headers: {
@@ -176,12 +221,7 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     console.error('Error fetching employee locations:', error);
-    return NextResponse.json(
-      { 
-        error: 'Failed to fetch employee locations',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      }, 
-      { status: 500 }
-    );
+    // Handle error
+    return NextResponse.json({ error: 'Failed to fetch employee locations' }, { status: 500 });
   }
 }

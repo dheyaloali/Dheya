@@ -20,7 +20,6 @@ export function useAdminSocketEvents(normalizeEmployees?: (data: any[]) => any[]
 
   // Immediately update the store's connection state whenever useAdminSocket's connected state changes
   useEffect(() => {
-    console.log("[AdminSocketEvents] Admin socket connection state changed:", connected);
     setConnected(connected);
     
     // Dispatch a custom event that other components can listen to
@@ -46,14 +45,12 @@ export function useAdminSocketEvents(normalizeEmployees?: (data: any[]) => any[]
       // Prevent duplicate processing within 500ms
       const now = Date.now();
       if (now - lastUpdateRef.current.employees < 500) {
-        console.log("[Socket] Ignoring duplicate employees event");
         return;
       }
       lastUpdateRef.current.employees = now;
       
       if (normalizeEmployees) {
         const normalized = normalizeEmployees(data);
-        console.log("[Realtime] Normalized employees:", normalized);
         setEmployees(normalized);
       } else {
         setEmployees(data);
@@ -66,7 +63,6 @@ export function useAdminSocketEvents(normalizeEmployees?: (data: any[]) => any[]
       const updateId = `${update.id}-${update.timestamp || Date.now()}`;
       const now = Date.now();
       if (now - (lastUpdateRef.current[updateId] || 0) < 500) {
-        console.log("[Socket] Ignoring duplicate location update");
         return;
       }
       lastUpdateRef.current[updateId] = now;
@@ -79,7 +75,6 @@ export function useAdminSocketEvents(normalizeEmployees?: (data: any[]) => any[]
       // Prevent duplicate online notifications
       const now = Date.now();
       if (now - (lastUpdateRef.current.employeeOnline[id] || 0) < 5000) {
-        console.log("[Socket] Ignoring duplicate employee-online event", id);
         return;
       }
       lastUpdateRef.current.employeeOnline[id] = now;
@@ -93,7 +88,6 @@ export function useAdminSocketEvents(normalizeEmployees?: (data: any[]) => any[]
       // Prevent duplicate offline notifications
       const now = Date.now();
       if (now - (lastUpdateRef.current.employeeOffline[id] || 0) < 5000) {
-        console.log("[Socket] Ignoring duplicate employee-offline event", id);
         return;
       }
       lastUpdateRef.current.employeeOffline[id] = now;
@@ -112,12 +106,10 @@ export function useAdminSocketEvents(normalizeEmployees?: (data: any[]) => any[]
 
     // Listen for socket connect/disconnect events to ensure store state stays in sync
     socket.on("connect", () => {
-      console.log("[AdminSocketEvents] Socket connected event");
       setConnected(true);
     });
 
     socket.on("disconnect", () => {
-      console.log("[AdminSocketEvents] Socket disconnected event");
       setConnected(false);
     });
 

@@ -147,9 +147,8 @@ export async function GET(req: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error fetching salary breakdown:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch salary breakdown' },
+      { error: "Failed to fetch salary breakdown" },
       { status: 500 }
     );
   }

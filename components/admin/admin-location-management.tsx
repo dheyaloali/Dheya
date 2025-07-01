@@ -1,12 +1,13 @@
 "use client"
 
-import { useState, useEffect, useRef, useMemo } from "react"
+import { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import { MapContainer } from "@/components/admin/map-container"
 import { EmployeeList } from "@/components/admin/employee-list"
 import { DateRangePicker } from "@/components/date-range-picker"
 import { useToast } from "@/components/ui/use-toast"
 import apiClient from "@/lib/api-client"
-import { MapPin, History, Users, Battery, Clock } from "lucide-react"
+import adminApiClient, { adminFetcher } from "@/lib/admin-api-client"
+import { MapPin, History, Users, Battery, Clock, BatteryLow, AlertCircle, UserX } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -21,6 +22,9 @@ import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell, TableCap
 import { Popup } from "react-leaflet"
 import * as XLSX from "xlsx"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Badge } from "@/components/ui/badge"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
 const CITIES = ["All", "Jakarta", "Surabaya", "Bandung"]
 
@@ -107,6 +111,9 @@ function LocationHistoryTable({
   setPageSize: (s: number) => void;
   allLocationHistory: LocationHistory[]; // All locations for map correlation
 }) {
+  // Add search state
+  const [searchQuery, setSearchQuery] = useState("");
+  
   // SWR for paginated location history with optimized caching
   const { data, isLoading, mutate } = useSWR(
     ["employee-location-history", employeeId, dateRange.from.toISOString(), dateRange.to.toISOString(), page, pageSize],
@@ -114,7 +121,7 @@ function LocationHistoryTable({
       // Check if we already have this data in allLocationHistory
       // If so, we can avoid an API call for small datasets
       if (allLocationHistory.length > 0 && allLocationHistory.length <= 100) {
-        console.log("[LocationHistoryTable] Using cached data instead of API call");
+        // Using cached data instead of API call
         
         // Sort by newest first for table display (desc)
         const sorted = [...allLocationHistory].sort((a, b) => 
@@ -133,8 +140,7 @@ function LocationHistoryTable({
       }
       
       // For larger datasets, use the API with server-side pagination
-      console.log("[LocationHistoryTable] Fetching from API with pagination");
-      return await apiClient.fetchLocationHistory(employeeId, dateRange.from, dateRange.to, page, pageSize, 'desc');
+      return await adminApiClient.fetchLocationHistory(employeeId, dateRange.from, dateRange.to, page, pageSize, 'desc');
     },
     {
       revalidateOnFocus: true,
@@ -143,9 +149,85 @@ function LocationHistoryTable({
       revalidateIfStale: false
     }
   );
-  const locations = data?.locations || [];
-  const total = data?.total || 0;
+  
+  // Filter locations based on search query
+  const filteredLocations = useMemo(() => {
+    if (!searchQuery || !data?.locations) return data?.locations || [];
+    
+    const query = searchQuery.toLowerCase().trim();
+    return data.locations.filter((loc: LocationHistory) => {
+      // Search in address
+      if (loc.address && loc.address.toLowerCase().includes(query)) {
+        return true;
+      }
+      
+      // Search in coordinates
+      const coordsString = `${loc.latitude}, ${loc.longitude}`;
+      if (coordsString.includes(query)) {
+        return true;
+      }
+      
+      // Search in timestamp
+      const dateStr = new Date(loc.timestamp).toLocaleString().toLowerCase();
+      if (dateStr.includes(query)) {
+        return true;
+      }
+      
+      return false;
+    });
+  }, [data?.locations, searchQuery]);
+  
+  const locations = filteredLocations || [];
+  const total = searchQuery ? locations.length : (data?.total || 0);
   const totalPages = Math.ceil(total / pageSize);
+
+  // Reset pagination when search query changes
+  useEffect(() => {
+    if (searchQuery && page !== 0) {
+      setPage(0);
+    }
+  }, [searchQuery, page, setPage]);
+
+  // Container ref for virtualization
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const [visibleStartIndex, setVisibleStartIndex] = useState(0);
+  const [visibleEndIndex, setVisibleEndIndex] = useState(0);
+  
+  // Handle scroll events to update visible rows
+  useEffect(() => {
+    if (!tableContainerRef.current) return;
+    
+    const handleScroll = () => {
+      const container = tableContainerRef.current;
+      if (!container) return;
+      
+      const scrollTop = container.scrollTop;
+      const rowHeight = 48; // Approximate height of each row in pixels
+      const containerHeight = container.clientHeight;
+      
+      // Calculate visible range with buffer for smooth scrolling
+      const buffer = 5; // Extra rows to render above and below viewport
+      const start = Math.max(0, Math.floor(scrollTop / rowHeight) - buffer);
+      const end = Math.min(
+        locations.length - 1, 
+        Math.ceil((scrollTop + containerHeight) / rowHeight) + buffer
+      );
+      
+      setVisibleStartIndex(start);
+      setVisibleEndIndex(end);
+    };
+    
+    // Initial calculation
+    handleScroll();
+    
+    // Add scroll listener
+    const container = tableContainerRef.current;
+    container.addEventListener('scroll', handleScroll);
+    
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+    };
+  }, [locations.length]);
 
   // --- Robust: scroll selected row into view ---
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
@@ -210,9 +292,58 @@ function LocationHistoryTable({
     }
   };
 
+  // Calculate total height for virtualization
+  const totalHeight = locations.length * 48; // 48px per row
+  
+  // Calculate position for each row
+  const getVirtualRowStyles = (index: number) => ({
+    position: 'absolute',
+    top: `${index * 48}px`,
+    width: '100%',
+    height: '48px'
+  });
+
   return (
     <div className="mt-8 w-full max-w-3xl mx-auto border-t bg-white">
-      <div className="max-h-96 overflow-y-auto">
+      {/* Add search input */}
+      <div className="p-4 border-b">
+        <div className="relative">
+          <input
+            type="text"
+            placeholder="Search locations by address or coordinates..."
+            className="w-full px-4 py-2 pl-10 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+            </svg>
+          </div>
+          {searchQuery && (
+            <button
+              className="absolute inset-y-0 right-0 flex items-center pr-3"
+              onClick={() => setSearchQuery("")}
+            >
+              <svg className="w-5 h-5 text-gray-400 hover:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+              </svg>
+            </button>
+          )}
+        </div>
+        {searchQuery && (
+          <div className="mt-2 text-sm text-gray-500">
+            Found {locations.length} results for "{searchQuery}"
+          </div>
+        )}
+      </div>
+      
+      <div 
+        ref={tableContainerRef}
+        className="max-h-96 overflow-y-auto relative"
+        style={{ height: '400px' }} // Fixed height for virtualization
+      >
+        <div style={{ height: `${totalHeight}px`, position: 'relative' }}>
         <Table>
           <TableCaption>Employee location history for the selected date range.</TableCaption>
           <TableHeader>
@@ -223,27 +354,32 @@ function LocationHistoryTable({
               <TableHead>Point #</TableHead>
             </TableRow>
           </TableHeader>
-          <TableBody>
             {isLoading ? (
               // Skeleton loader for table rows
-              Array.from({ length: pageSize }).map((_, idx) => (
+              <TableBody>
+                {Array.from({ length: pageSize }).map((_, idx) => (
                 <TableRow key={idx}>
                   <TableCell><Skeleton className="h-4 w-32" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-48" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-12" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-12" /></TableCell>
                 </TableRow>
-              ))
+                ))}
+              </TableBody>
             ) : locations.length === 0 ? (
+              <TableBody>
               <TableRow><TableCell colSpan={4}>No location history found.</TableCell></TableRow>
+              </TableBody>
             ) : (
-              locations.map((loc: LocationHistory, idx: number) => {
+              <TableBody>
+                {locations.slice(visibleStartIndex, visibleEndIndex + 1).map((loc: LocationHistory, idx: number) => {
+                  const actualIndex = visibleStartIndex + idx;
                 // Find the corresponding index in the allLocationHistory array
                 const globalIdx = findAllHistoryIndex(loc);
                 
                 return (
                   <TableRow
-                    ref={el => { rowRefs.current[idx] = el || null; }}
+                      ref={el => { rowRefs.current[actualIndex] = el || null; }}
                     key={loc.id || loc.timestamp}
                     className={globalIdx === selectedIndex ? "bg-blue-100 text-blue-900 font-semibold cursor-pointer" : "hover:bg-gray-100 cursor-pointer"}
                     onClick={() => {
@@ -251,6 +387,7 @@ function LocationHistoryTable({
                         onSelect(globalIdx);
                       }
                     }}
+                      style={getVirtualRowStyles(actualIndex)}
                   >
                     <TableCell>{new Date(loc.timestamp).toLocaleString()}</TableCell>
                     <TableCell>{loc.address || `${loc.latitude.toFixed(6)}, ${loc.longitude.toFixed(6)}`}</TableCell>
@@ -264,10 +401,11 @@ function LocationHistoryTable({
                     </TableCell>
                   </TableRow>
                 );
-              })
-            )}
+                })}
           </TableBody>
+            )}
         </Table>
+        </div>
       </div>
       {/* Download Button at the bottom */}
       <div className="flex justify-end p-4">
@@ -290,6 +428,160 @@ function LocationHistoryTable({
   );
 }
 
+function StatusNotifications() {
+  const notifications = useEmployeeStore((s) => s.notifications);
+  const toast = useToast();
+  
+  // Filter for status-related notifications
+  const statusNotifications = useMemo(() => {
+    return notifications.filter(n => 
+      n.type === "admin_employee_stationary" || 
+      n.type === "admin_employee_low_battery" || 
+      n.type === "admin_employee_offline"
+    );
+  }, [notifications]);
+  
+  // Group notifications by type for better organization
+  const groupedNotifications = useMemo(() => {
+    const groups = {
+      stationary: [] as any[],
+      lowBattery: [] as any[],
+      offline: [] as any[]
+    };
+    
+    statusNotifications.forEach(n => {
+      if (n.type === "admin_employee_stationary") {
+        groups.stationary.push(n);
+      } else if (n.type === "admin_employee_low_battery") {
+        groups.lowBattery.push(n);
+      } else if (n.type === "admin_employee_offline") {
+        groups.offline.push(n);
+      }
+    });
+    
+    return groups;
+  }, [statusNotifications]);
+  
+  const handleViewLocation = useCallback((employeeId: string) => {
+    // This would be implemented to focus on this employee on the map
+    toast({
+      title: "Locating employee",
+      description: `Focusing on employee ${employeeId} on the map`,
+    });
+  }, [toast]);
+  
+  if (statusNotifications.length === 0) {
+    return null;
+  }
+  
+  return (
+    <Card className="mb-4">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-lg flex items-center">
+          <AlertCircle className="w-5 h-5 mr-2 text-amber-500" />
+          Employee Status Alerts
+        </CardTitle>
+        <CardDescription>
+          Notifications about employee movement, battery, and connection status
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ScrollArea className="h-[200px] pr-4">
+          {groupedNotifications.offline.length > 0 && (
+            <div className="mb-4">
+              <h4 className="text-sm font-medium flex items-center mb-2">
+                <UserX className="w-4 h-4 mr-1 text-red-500" />
+                Offline Employees
+              </h4>
+              {groupedNotifications.offline.map((notification) => (
+                <div key={notification.id} className="mb-2 p-2 bg-red-50 rounded-md border border-red-200">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-sm font-medium">{notification.message}</p>
+                      <p className="text-xs text-gray-500">
+                        {new Date(notification.timestamp || notification.createdAt).toLocaleTimeString()}
+                      </p>
+                    </div>
+                    <Badge variant="destructive" className="ml-2">Offline</Badge>
+                  </div>
+                  <Button 
+                    variant="link" 
+                    size="sm" 
+                    className="p-0 h-auto text-xs mt-1"
+                    onClick={() => handleViewLocation(notification.employeeId)}
+                  >
+                    View on map
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {groupedNotifications.stationary.length > 0 && (
+            <div className="mb-4">
+              <h4 className="text-sm font-medium flex items-center mb-2">
+                <Clock className="w-4 h-4 mr-1 text-amber-500" />
+                Stationary Employees
+              </h4>
+              {groupedNotifications.stationary.map((notification) => (
+                <div key={notification.id} className="mb-2 p-2 bg-amber-50 rounded-md border border-amber-200">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-sm font-medium">{notification.message}</p>
+                      <p className="text-xs text-gray-500">
+                        {new Date(notification.timestamp || notification.createdAt).toLocaleTimeString()}
+                      </p>
+                    </div>
+                    <Badge variant="outline" className="bg-amber-100 ml-2">Not Moving</Badge>
+                  </div>
+                  <Button 
+                    variant="link" 
+                    size="sm" 
+                    className="p-0 h-auto text-xs mt-1"
+                    onClick={() => handleViewLocation(notification.employeeId)}
+                  >
+                    View on map
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {groupedNotifications.lowBattery.length > 0 && (
+            <div>
+              <h4 className="text-sm font-medium flex items-center mb-2">
+                <BatteryLow className="w-4 h-4 mr-1 text-orange-500" />
+                Low Battery Alerts
+              </h4>
+              {groupedNotifications.lowBattery.map((notification) => (
+                <div key={notification.id} className="mb-2 p-2 bg-orange-50 rounded-md border border-orange-200">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-sm font-medium">{notification.message}</p>
+                      <p className="text-xs text-gray-500">
+                        {new Date(notification.timestamp || notification.createdAt).toLocaleTimeString()}
+                      </p>
+                    </div>
+                    <Badge variant="outline" className="bg-orange-100 ml-2">Low Battery</Badge>
+                  </div>
+                  <Button 
+                    variant="link" 
+                    size="sm" 
+                    className="p-0 h-auto text-xs mt-1"
+                    onClick={() => handleViewLocation(notification.employeeId)}
+                  >
+                    View on map
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </ScrollArea>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function AdminLocationManagement() {
   useAdminSocketEvents(normalizeEmployees); // pass normalization function to socket events
   const employees = useEmployeeStore((s) => s.employees);
@@ -308,7 +600,7 @@ export function AdminLocationManagement() {
   const [isMapFullscreen, setIsMapFullscreen] = useState(false)
   const { socket, connected: adminSocketConnected, connect, disconnect } = useAdminSocket();
   // Fetch settings directly to use as source of truth for connection status
-  const { data: settings, mutate: mutateSettings } = useSWR("/api/admin/settings", url => fetch(url).then(r => r.json()));
+  const { data: settings, mutate: mutateSettings } = useSWR("/api/admin/settings", adminFetcher);
   
   // The true connection status should respect settings as source of truth
   const connectionEnabled = settings?.adminRealtimeEnabled === true;
@@ -318,22 +610,57 @@ export function AdminLocationManagement() {
   // 2. Socket is actually connected (implementation detail)
   const effectiveConnectionStatus = connectionEnabled && connected;
   
+  // Track connection state with more detail
+  const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "disconnected">(
+    effectiveConnectionStatus ? "connected" : connectionEnabled ? "connecting" : "disconnected"
+  );
+  
+  // Update connection state when connection status changes
+  useEffect(() => {
+    if (!connectionEnabled) {
+      setConnectionState("disconnected");
+    } else if (effectiveConnectionStatus) {
+      setConnectionState("connected");
+    } else {
+      setConnectionState("connecting");
+    }
+  }, [effectiveConnectionStatus, connectionEnabled]);
+  
+  // Listen for socket connection events to update UI immediately
+  useEffect(() => {
+    const handleSocketConnected = () => {
+      if (connectionEnabled) {
+        setConnectionState("connected");
+      }
+    };
+    
+    const handleSocketDisconnected = () => {
+      if (connectionEnabled) {
+        setConnectionState("connecting");
+      } else {
+        setConnectionState("disconnected");
+      }
+    };
+    
+    if (typeof window !== 'undefined') {
+      window.addEventListener('admin-socket-connected', handleSocketConnected);
+      window.addEventListener('admin-socket-disconnected', handleSocketDisconnected);
+    }
+    
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('admin-socket-connected', handleSocketConnected);
+        window.removeEventListener('admin-socket-disconnected', handleSocketDisconnected);
+      }
+    };
+  }, [connectionEnabled]);
+  
   // Ensure both connection states are in sync
   useEffect(() => {
-    // Log the connection state from all sources for debugging
-    console.log("[AdminLocation] Connection states:", { 
-      storeConnected: connected, 
-      socketConnected: adminSocketConnected,
-      settingsEnabled: connectionEnabled,
-      effectiveStatus: effectiveConnectionStatus
-    });
-    
     // Force immediate connection/disconnection based on settings
     if (connectionEnabled && !connected && socket) {
-      console.log("[AdminLocation] Settings enabled but not connected - forcing connection");
       connect(); // This will update the server setting and connect the socket
     } else if (!connectionEnabled && connected) {
-      console.log("[AdminLocation] Settings disabled but connected - forcing disconnection");
       disconnect(); // This will update the server setting and disconnect the socket
     }
   }, [connectionEnabled, connected, socket, effectiveConnectionStatus, connect, disconnect, adminSocketConnected]);
@@ -342,24 +669,20 @@ export function AdminLocationManagement() {
   useEffect(() => {
     const handleSettingsChange = (event: CustomEvent) => {
       if (event.detail?.setting === 'adminRealtimeEnabled') {
-        console.log('[AdminLocation] Detected settings change event:', event.detail);
         // Force refetch settings to update UI immediately
         mutateSettings();
       }
     };
     
     const handleSocketStateChange = (event: CustomEvent) => {
-      console.log('[AdminLocation] Detected socket state change event:', event.detail);
       // No need to manually update connected state as it will be updated through the useAdminSocketEvents hook
       
       // If the socket connection state changes but doesn't match settings, force alignment
       if (event.detail?.connected && !connectionEnabled) {
         // Connected but settings say it should be disconnected
-        console.log('[AdminLocation] Socket connected but settings disabled - forcing disconnect');
         disconnect();
       } else if (!event.detail?.connected && connectionEnabled) {
         // Disconnected but settings say it should be connected
-        console.log('[AdminLocation] Socket disconnected but settings enabled - forcing connect');
         connect();
       }
       
@@ -393,7 +716,7 @@ export function AdminLocationManagement() {
       : null,
     () =>
       selectedEmployee && dateRange.from && dateRange.to
-        ? apiClient.fetchLocationHistory(selectedEmployee.id, dateRange.from, dateRange.to)
+        ? adminApiClient.fetchLocationHistory(selectedEmployee.id, dateRange.from, dateRange.to)
         : Promise.resolve([]),
     {
       revalidateOnFocus: true,
@@ -441,7 +764,7 @@ export function AdminLocationManagement() {
       : null,
     async ([, employeeId, from, to, page, pageSize]) => {
       if (!employeeId || !from || !to) return [];
-      return await apiClient.fetchLocationHistory(
+      return await adminApiClient.fetchLocationHistory(
         employeeId, 
         new Date(from), 
         new Date(to), 
@@ -462,7 +785,7 @@ export function AdminLocationManagement() {
   // --- SWR fallback: always fetch fallback data ---
   const { data: fallbackEmployees = [], isLoading: isFallbackLoading, mutate: mutateFallback } = useSWR(
     ["employees-fallback", selectedCity],
-    () => apiClient.fetchEmployees(selectedCity),
+    () => adminApiClient.fetchEmployeeLocations(selectedCity),
     {
       refreshInterval: !connected ? 30000 : 0,
       revalidateOnFocus: true,
@@ -481,8 +804,6 @@ export function AdminLocationManagement() {
       // If page becomes visible, refresh data immediately
       // No time constraints or previous state requirements
       if (isVisible) {
-        console.log("[AdminLocation] Page became visible, refreshing data");
-        
         // Force refresh data
         mutateFallback();
         if (shouldFetchHistory) {
@@ -495,7 +816,6 @@ export function AdminLocationManagement() {
     };
     
     // Also refresh data on initial mount to ensure we have latest data
-    console.log("[AdminLocation] Component mounted, initializing data");
     mutateFallback();
     if (shouldFetchHistory) {
       mutateHistory();
@@ -516,7 +836,6 @@ export function AdminLocationManagement() {
     if (!socket) return;
     
     const handleConnect = () => {
-      console.log("[AdminLocation] Socket reconnected, refreshing data");
       mutateFallback();
       if (shouldFetchHistory) {
         mutateHistory();
@@ -528,7 +847,6 @@ export function AdminLocationManagement() {
     
     // Also do an immediate refresh if socket is already connected
     if (socket.connected) {
-      console.log("[AdminLocation] Socket already connected, refreshing data");
       mutateFallback();
       if (shouldFetchHistory) {
         mutateHistory();
@@ -545,7 +863,6 @@ export function AdminLocationManagement() {
   useEffect(() => {
     if (!connected && fallbackEmployees.length > 0 && employees.length === 0) {
       const normalized = normalizeEmployees(fallbackEmployees);
-      console.log("[Fallback] Normalized employees:", normalized);
       setEmployees(normalized);
     }
   }, [fallbackEmployees, connected, setEmployees, employees]);
@@ -556,11 +873,6 @@ export function AdminLocationManagement() {
       selectedCity === "All" ||
       (employee.city && employee.city.toLowerCase() === selectedCity.toLowerCase())
     ), [employees, selectedCity]);
-
-  // Add debug log for filtered employees (now after declaration)
-  useEffect(() => {
-    console.log("Filtered employees for UI:", filteredEmployees);
-  }, [filteredEmployees]);
 
   const handleEmployeeSelect = (employee: Employee) => {
     setSelectedEmployee(employee)
@@ -617,10 +929,10 @@ export function AdminLocationManagement() {
         
         {/* Connection status indicator - now respects settings as source of truth */}
         <div className="flex items-center gap-2">
-          <div className={`h-3 w-3 rounded-full ${effectiveConnectionStatus ? 'bg-green-500' : 'bg-red-500'}`}></div>
-          <span className={`text-sm ${effectiveConnectionStatus ? 'text-green-700' : 'text-red-700'}`}>
+          <div className={`h-3 w-3 rounded-full ${connectionState === "connected" ? 'bg-green-500' : connectionState === "connecting" ? 'bg-yellow-500' : 'bg-red-500'}`}></div>
+          <span className={`text-sm ${connectionState === "connected" ? 'text-green-700' : connectionState === "connecting" ? 'text-yellow-700' : 'text-red-700'}`}>
             {!connectionEnabled ? 'Real-time disabled in settings' : 
-             (effectiveConnectionStatus ? 'Connected' : 'Connecting...')}
+             (connectionState === "connected" ? 'Connected' : connectionState === "connecting" ? 'Connecting...' : 'Disconnected')}
           </span>
         </div>
       </div>
@@ -763,7 +1075,7 @@ export function AdminLocationManagement() {
                   selectedHistoryIndex={selectedHistoryIndex}
                   onSelectHistoryIndex={setSelectedHistoryIndex}
                 >
-                  {selectedEmployee && viewMode === "history" && dateRange.from && dateRange.to && (
+                  {selectedEmployee && viewMode === "history" && dateRange.from && dateRange.to && selectedEmployee.location && (
                     <Popup>
                       <div>
                         <b>{new Date(selectedEmployee.location.timestamp).toLocaleString()}</b><br />
@@ -788,7 +1100,7 @@ export function AdminLocationManagement() {
                       selectedHistoryIndex={selectedHistoryIndex}
                       onSelectHistoryIndex={setSelectedHistoryIndex}
                     >
-                      {selectedEmployee && viewMode === "history" && dateRange.from && dateRange.to && (
+                      {selectedEmployee && viewMode === "history" && dateRange.from && dateRange.to && selectedEmployee.location && (
                         <Popup>
                           <div>
                             <b>{new Date(selectedEmployee.location.timestamp).toLocaleString()}</b><br />
@@ -822,6 +1134,7 @@ export function AdminLocationManagement() {
           </div>
         </div>
       </div>
+      <StatusNotifications />
     </div>
   )
 }

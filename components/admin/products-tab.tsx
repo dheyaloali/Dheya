@@ -19,6 +19,7 @@ import { LoadingButton } from "@/components/ui/LoadingButton"
 import { useAdminSocket } from "@/hooks/useAdminSocket"
 import { useNotifications } from "@/hooks/useNotifications"
 import NotificationPanel from "@/components/ui/NotificationPanel"
+import adminApiClient, { adminFetcher, fetchWithCSRF } from "@/lib/admin-api-client"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,6 +32,8 @@ import {
 } from "@/components/ui/alert-dialog"
 import { notifyUserOrEmployee } from "@/lib/notifications"
 import { useSession } from "next-auth/react"
+import debounce from "lodash.debounce"
+import { useCurrency } from "@/components/providers/currency-provider"
 
 type Product = {
   id: string | number;
@@ -65,6 +68,7 @@ export default function ProductsTab() {
   const [isUpdatingProduct, setIsUpdatingProduct] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [deleteConfirmProduct, setDeleteConfirmProduct] = useState<Product | null>(null)
+  const { formatAmount } = useCurrency();
 
   // Debounce search input
   useEffect(() => {
@@ -77,204 +81,74 @@ export default function ProductsTab() {
   // Build the API URL with search and pagination
   const apiUrl = `/api/products?page=${page}&pageSize=${pageSize}` + (debouncedSearch ? `&search=${encodeURIComponent(debouncedSearch)}` : "")
 
-  const { data, error, isLoading, mutate } = useSWR(apiUrl, (url) => fetch(url).then(res => res.json()))
+  const { data, error, isLoading, mutate } = useSWR(apiUrl, adminFetcher)
   const products = data?.products || []
   const total = data?.total || 0
   const pageCount = Math.ceil(total / pageSize)
 
+  // Debounced mutate for WebSocket events
+  const debouncedMutate = debounce(() => mutate(), 300, { leading: true, trailing: true });
+
   // Add WebSocket listener for product updates
   useEffect(() => {
     if (!adminSocket) return;
-
     const handleProductUpdate = (data: any) => {
-      // Refresh product data
-      mutate();
-      // Show notification
+      debouncedMutate();
       toast({
         title: "Product Update",
         description: data.message || "A product has been updated"
       });
-      // Refresh notifications
       mutateNotifications();
     };
-
     adminSocket.on("product-update", handleProductUpdate);
     adminSocket.on("product-assigned", handleProductUpdate);
-
     return () => {
-      adminSocket.off("product-update");
-      adminSocket.off("product-assigned");
+      adminSocket.off("product-update", handleProductUpdate);
+      adminSocket.off("product-assigned", handleProductUpdate);
     };
-  }, [adminSocket, mutate, mutateNotifications, toast]);
+  }, [adminSocket, debouncedMutate, mutateNotifications, toast]);
 
+  // Optimistic Edit
   const handleProductUpdate = async (productId: string | number, updatedFields: Partial<Product>) => {
+    setIsUpdatingProduct(true);
+    setActionError(null);
+    const prevProducts = products;
     try {
-      const response = await fetch(`/api/admin/products/${productId}`, {
+      // Optimistically update UI
+      const updatedProducts = products.map(p => p.id === productId ? { ...p, ...updatedFields } : p);
+      mutate({ products: updatedProducts, total }, false);
+      const response = await fetchWithCSRF(`/api/admin/products/${productId}`, {
         method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify(updatedFields),
       });
-
-      if (!response.ok) {
-        throw new Error("Failed to update product");
-      }
-
-      const now = new Date().toLocaleString();
-      
-      // Handle different types of updates
-      if (updatedFields.assignedTo) {
-        // Product Assignment
-        const employee = await fetch(`/api/admin/employees/${updatedFields.assignedTo}`).then(res => res.json());
-        
-        // Notify admin
-        await notifyUserOrEmployee({
-          userId: session?.user?.id,
-          type: "admin_product_assigned",
-          message: `You assigned product '${updatedFields.name}' to ${employee.name} on ${now}.`,
-          actionUrl: `/admin/employees/${employee.id}/details`,
-          actionLabel: "View Employee",
-          sessionToken: session?.user?.sessionToken,
-          broadcastToAdmin: true,
-        });
-
-        // Notify employee
-        await notifyUserOrEmployee({
-          employeeId: employee.id,
-          type: "employee_product_assigned",
-          message: `You have been assigned product '${updatedFields.name}' on ${now}.`,
-          actionUrl: "/employee/products",
-          actionLabel: "View Products",
-          sessionToken: session?.user?.sessionToken,
-          broadcastToEmployee: true,
-        });
-      } else if (updatedFields.stockLevel !== undefined) {
-        // Stock Update
-        const product = await fetch(`/api/admin/products/${productId}`).then(res => res.json());
-        
-        // Notify admin
-        await notifyUserOrEmployee({
-          userId: session?.user?.id,
-          type: "admin_stock_updated",
-          message: `You updated stock for '${product.name}' to ${updatedFields.stockLevel} on ${now}.`,
-          actionUrl: `/admin/products`,
-          actionLabel: "View Products",
-          sessionToken: session?.user?.sessionToken,
-          broadcastToAdmin: true,
-        });
-
-        // Notify assigned employee if any
-        if (product.assignedTo) {
-          await notifyUserOrEmployee({
-            employeeId: product.assignedTo,
-            type: "employee_stock_updated",
-            message: `Stock for '${product.name}' has been updated to ${updatedFields.stockLevel} on ${now}.`,
-            actionUrl: "/employee/products",
-            actionLabel: "View Products",
-            sessionToken: session?.user?.sessionToken,
-            broadcastToEmployee: true,
-          });
-      }
-      } else {
-        // General Product Update
-        const product = await fetch(`/api/admin/products/${productId}`).then(res => res.json());
-        
-        // Notify admin
-        await notifyUserOrEmployee({
-          userId: session?.user?.id,
-          type: "admin_product_updated",
-          message: `You updated product '${product.name}' on ${now}.`,
-          actionUrl: `/admin/products`,
-          actionLabel: "View Products",
-          sessionToken: session?.user?.sessionToken,
-          broadcastToAdmin: true,
-        });
-
-        // Notify assigned employee if any
-        if (product.assignedTo) {
-          await notifyUserOrEmployee({
-            employeeId: product.assignedTo,
-            type: "employee_product_updated",
-            message: `Product '${product.name}' has been updated on ${now}.`,
-            actionUrl: "/employee/products",
-            actionLabel: "View Products",
-            sessionToken: session?.user?.sessionToken,
-            broadcastToEmployee: true,
-          });
-        }
-      }
-
-      mutate();
-      toast({
-        title: "Success",
-        description: "Product updated successfully",
-      });
+      if (!response.ok) throw new Error("Failed to update product");
+      toast({ title: "Success", description: "Product updated successfully" });
     } catch (error) {
-      console.error("Error updating product:", error);
-      toast({
-        title: "Error",
-        description: "Failed to update product",
-        variant: "destructive",
-      });
+      mutate({ products: prevProducts, total }, false); // Revert
+      setActionError("Failed to update product");
+      toast({ title: "Error", description: "Failed to update product", variant: "destructive" });
+    } finally {
+      setIsUpdatingProduct(false);
     }
   };
 
+  // Optimistic Delete
   const handleDeleteProduct = async (productId: string | number) => {
     setIsDeletingProduct(true);
     setActionError(null);
+    const prevProducts = products;
     try {
-      // Get product details before deletion
-      const product = await fetch(`/api/admin/products/${productId}`).then(res => res.json());
-      
-      const response = await fetch(`/api/products/${productId}`, {
-        method: "DELETE",
-      });
-      
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Failed to delete product");
-      }
-
-      const now = new Date().toLocaleString();
-
-      // Notify admin
-      await notifyUserOrEmployee({
-        userId: session?.user?.id,
-        type: "admin_product_deleted",
-        message: `You deleted product '${product.name}' on ${now}.`,
-        actionUrl: `/admin/products`,
-        actionLabel: "View Products",
-        sessionToken: session?.user?.sessionToken,
-        broadcastToAdmin: true,
-      });
-
-      // Notify assigned employee if any
-      if (product.assignedTo) {
-        await notifyUserOrEmployee({
-          employeeId: product.assignedTo,
-          type: "employee_product_deleted",
-          message: `Product '${product.name}' has been deleted on ${now}.`,
-          actionUrl: "/employee/products",
-          actionLabel: "View Products",
-          sessionToken: session?.user?.sessionToken,
-          broadcastToEmployee: true,
-        });
-      }
-
-      await mutate();
-      toast({
-        title: "Product deleted",
-        description: "Product deleted successfully!",
-      });
+      // Optimistically remove from UI
+      const updatedProducts = products.filter(p => p.id !== productId);
+      mutate({ products: updatedProducts, total: total - 1 }, false);
+      const response = await fetchWithCSRF(`/api/products/${productId}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("Failed to delete product");
+      toast({ title: "Success", description: "Product deleted successfully" });
       setDeleteConfirmProduct(null);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to delete product");
-      toast({
-        title: "Error",
-        description: err instanceof Error ? err.message : "Failed to delete product",
-        variant: "destructive",
-      });
+    } catch (error: any) {
+      mutate({ products: prevProducts, total }, false); // Revert
+      setActionError(error.message || "Failed to delete product");
+      toast({ title: "Error", description: error.message || "Failed to delete product", variant: "destructive" });
     } finally {
       setIsDeletingProduct(false);
     }
@@ -325,26 +199,20 @@ export default function ProductsTab() {
     setAddForms(forms => forms.map((f, i) => i === idx ? { ...f, [field]: value } : f))
   }
 
-  // Bulk Add Products logic
+  // Optimistic Batch Add
   const doAddProducts = async () => {
     setAddError("");
     setIsAddingProducts(true);
     setActionError(null);
+    const prevProducts = products;
     try {
       // Validate all rows
       for (const form of addForms) {
-        if (!form.name.trim() || !form.price.trim()) {
-          throw new Error("Name and price are required for all products.");
+        if (!form.name.trim() || !form.price.trim()) throw new Error("Name and price are required for all products.");
+        if (form.uploading) throw new Error("Please wait for all images to finish uploading.");
+        if (form.uploadError) throw new Error("Please fix all image upload errors before submitting.");
         }
-        if (form.uploading) {
-          throw new Error("Please wait for all images to finish uploading.");
-        }
-        if (form.uploadError) {
-          throw new Error("Please fix all image upload errors before submitting.");
-        }
-      }
-
-      // Optimistically update
+      // Optimistically add
       const optimisticProducts = addForms.map(form => ({
         id: Date.now() + Math.random(),
         name: form.name,
@@ -353,8 +221,7 @@ export default function ProductsTab() {
         description: form.description,
         imageUrl: form.imageUrl,
       }));
-      mutate({ products: [...optimisticProducts, ...products] }, false);
-
+      mutate({ products: [...optimisticProducts, ...products], total: total + optimisticProducts.length }, false);
       // POST each product
       let allSuccess = true;
       for (const form of addForms) {
@@ -378,21 +245,15 @@ export default function ProductsTab() {
       }
       await mutate();
       if (allSuccess) {
-        toast({
-          title: "Products Added",
-          description: "All products were added successfully!",
-        });
+        toast({ title: "Products Added", description: "All products were added successfully!" });
         setAddForms([{ name: "", price: "", stockLevel: "0", description: "", imageFile: null, imagePreview: null, imageUrl: null, uploading: false, uploadError: "" }]);
       } else {
         throw new Error("Some products failed to add. Please check the list.");
       }
     } catch (err) {
+      mutate({ products: prevProducts, total }, false); // Revert
       setActionError(err instanceof Error ? err.message : "Failed to add products");
-      toast({
-        title: "Error",
-        description: err instanceof Error ? err.message : "Failed to add products",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: err instanceof Error ? err.message : "Failed to add products", variant: "destructive" });
     } finally {
       setIsAddingProducts(false);
     }
@@ -418,7 +279,8 @@ export default function ProductsTab() {
           </div>
         </div>
 
-        <div className="rounded-md border max-h-[400px] overflow-y-auto">
+        <div className="rounded-md border">
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -464,7 +326,7 @@ export default function ProductsTab() {
                     </TableCell>
                     <TableCell className="font-medium">{product.name}</TableCell>
                     <TableCell className="hidden md:table-cell max-w-[300px] truncate">{product.description}</TableCell>
-                    <TableCell>${product.price?.toFixed(2)}</TableCell>
+                    <TableCell>{formatAmount(product.price)}</TableCell>
                     <TableCell>
                       <StockBadge stock={product.stockLevel ?? 0} />
                     </TableCell>
@@ -486,6 +348,7 @@ export default function ProductsTab() {
               )}
             </TableBody>
           </Table>
+          </div>
         </div>
 
         {/* Pagination Controls */}

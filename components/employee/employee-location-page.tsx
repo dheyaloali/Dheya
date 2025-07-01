@@ -58,14 +58,14 @@ export function EmployeeLocationPage() {
       async (pos) => {
         const { latitude, longitude } = pos.coords
         const now = Date.now()
-        // Throttle: only send if moved >10m or >10s since last sent
+        // Throttle: only send if moved >5m or >5s since last sent (more aggressive for real-time)
         const last = lastSentRef.current
         const dist = last
           ? Math.sqrt(
               Math.pow(latitude - last.lat, 2) + Math.pow(longitude - last.lng, 2)
             ) * 111139 // rough meters per degree
           : Infinity
-        if (!last || dist > 10 || now - last.time > 10000) {
+        if (!last || dist > 5 || now - last.time > 5000) {
           try {
             await apiClient.updateEmployeeLocation({
               latitude,

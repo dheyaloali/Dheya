@@ -153,4 +153,4 @@ export async function DELETE(req: NextRequest, context: any) {
     console.error("DELETE /api/employees/[id] error:", error);
     return NextResponse.json({ error: "Failed to delete employee and user" }, { status: 500 });
   }
-} 
+}

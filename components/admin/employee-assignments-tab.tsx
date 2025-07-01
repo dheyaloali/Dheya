@@ -11,6 +11,7 @@ import AssignProductModal from "./assign-product-modal"
 import DeleteAssignmentModal from "./delete-assignment-modal"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useCurrency } from "@/components/providers/currency-provider"
 
 // Placeholder hooks for API data fetching
 const useEmployees = () => {
@@ -32,6 +33,7 @@ const useAssignments = () => {
 }
 
 export default function EmployeeAssignmentsTab() {
+  const { formatAmount } = useCurrency()
   const [searchTerm, setSearchTerm] = useState("")
   const employees = useEmployees() || []
   const [assignments, setAssignments] = useAssignments()
@@ -257,8 +259,8 @@ export default function EmployeeAssignmentsTab() {
                                             </div>
                                           </TableCell>
                                           <TableCell>{assignment.quantity}</TableCell>
-                                          <TableCell>${assignment.price.toFixed(2)}</TableCell>
-                                          <TableCell>${(assignment.quantity * assignment.price).toFixed(2)}</TableCell>
+                                          <TableCell>{formatAmount(assignment.price)}</TableCell>
+                                          <TableCell>{formatAmount(assignment.quantity * assignment.price)}</TableCell>
                                           <TableCell>{new Date(assignment.date).toLocaleDateString()}</TableCell>
                                           <TableCell className="text-right">
                                             <div className="flex justify-end gap-2">

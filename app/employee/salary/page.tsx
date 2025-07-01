@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { FaMoneyBillWave, FaClock, FaGift, FaMinusCircle, FaCalculator } from 'react-icons/fa';
 import { MdOutlineReceiptLong } from 'react-icons/md';
+import { useCurrency } from "@/components/providers/currency-provider";
 
 // Define a fetcher function
 const fetcher = (url: string) => fetch(url).then(res => res.json());
@@ -17,6 +18,7 @@ const fetcher = (url: string) => fetch(url).then(res => res.json());
 export default function EmployeeSalaryPage() {
   // Get translations
   const t = useTranslations('Salary');
+  const { formatAmount } = useCurrency();
 
   // State management
   const [page, setPage] = useState(1);
@@ -88,7 +90,7 @@ export default function EmployeeSalaryPage() {
           <div className="flex flex-col md:flex-row gap-8">
             <div className="flex-1">
               <div className="text-muted-foreground text-sm">{t('totalAmount')}</div>
-              <div className="text-lg">{data?.currentSalary?.amount ? `$${data.currentSalary.amount}` : t('noData')}</div>
+              <div className="text-lg">{data?.currentSalary?.amount ? formatAmount(data.currentSalary.amount) : t('noData')}</div>
             </div>
             <div className="flex-1">
               <div className="text-muted-foreground text-sm">{t('paymentStatus')}</div>
@@ -152,11 +154,11 @@ export default function EmployeeSalaryPage() {
                     ) : records.map((record: any) => (
                       <tr key={record.id}>
                         <td className="text-center align-middle text-sm">{record.startDate && record.endDate ? `${new Date(record.startDate).toLocaleDateString()} - ${new Date(record.endDate).toLocaleDateString()}` : '-'}</td>
-                        <td className="text-center align-middle text-sm">${record.metadata?.baseSalary?.toLocaleString?.() ?? '-'}</td>
-                        <td className="text-center align-middle text-sm">${record.metadata?.overtimeBonus?.toLocaleString?.() ?? '-'}</td>
-                        <td className="text-center align-middle text-sm">${record.metadata?.bonuses?.toLocaleString?.() ?? '-'}</td>
-                        <td className="text-center align-middle text-sm">-${record.metadata?.deductions?.toLocaleString?.() ?? '-'}</td>
-                        <td className="text-center align-middle text-sm">${record.metadata?.totalAmount?.toLocaleString?.() ?? record.amount?.toLocaleString?.() ?? '-'}</td>
+                        <td className="text-center align-middle text-sm">{formatAmount(record.metadata?.baseSalary)}</td>
+                        <td className="text-center align-middle text-sm">{formatAmount(record.metadata?.overtimeBonus)}</td>
+                        <td className="text-center align-middle text-sm">{formatAmount(record.metadata?.bonuses)}</td>
+                        <td className="text-center align-middle text-sm">-{formatAmount(record.metadata?.deductions)}</td>
+                        <td className="text-center align-middle text-sm">{formatAmount(record.metadata?.totalAmount ?? record.amount)}</td>
                         <td className="text-center align-middle text-sm">{record.status}</td>
                         <td className="text-center align-middle">
                           <button

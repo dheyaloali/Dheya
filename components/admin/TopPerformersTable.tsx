@@ -3,14 +3,22 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import React, { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { getAvatarImage, getAvatarInitials } from "@/lib/avatar-utils"
+import { useCurrency } from "@/components/providers/currency-provider";
 
 export interface TopPerformer {
-  id: number;
+  id: string;
   name: string;
   location: string;
   sales: number;
-  topProducts: { name: string; amount: number; quantity?: number; image?: string }[];
+  topProducts?: { name: string; amount: number }[];
   avatar?: string;
+  user?: {
+    image?: string | null;
+  };
+  employee?: {
+    pictureUrl?: string | null;
+  };
 }
 
 interface TopPerformersByCity {
@@ -31,6 +39,7 @@ export const TopPerformersTable = ({ performers, total, page, pageSize, setPage,
   const [modalOpen, setModalOpen] = useState(false);
   const [modalProducts, setModalProducts] = useState<{ name: string; amount: number; quantity?: number; image?: string }[]>([]);
   const [modalEmployee, setModalEmployee] = useState<{ name: string; avatar?: string } | null>(null);
+  const { formatAmount } = useCurrency();
 
   const openModal = (products: any[], employee: { name: string; avatar?: string }) => {
     setModalProducts(products);
@@ -59,26 +68,38 @@ export const TopPerformersTable = ({ performers, total, page, pageSize, setPage,
               <tr key={p.id} className="border-b">
                 <td className="px-2 py-2">
                   <Avatar className="h-9 w-9">
-                    <AvatarImage src={p.avatar || "/abstract-geometric-shapes.png"} alt={p.name} />
-                    <AvatarFallback>{p.name.split(" ").map((n) => n[0]).join("")}</AvatarFallback>
+                    <AvatarImage 
+                      src={getAvatarImage({ 
+                        image: p.user?.image, 
+                        pictureUrl: p.employee?.pictureUrl 
+                      })} 
+                      alt={p.name} 
+                    />
+                    <AvatarFallback>{getAvatarInitials(p.name)}</AvatarFallback>
                   </Avatar>
                 </td>
                 <td className="px-2 py-2 font-medium">{p.name}</td>
                 <td className="px-2 py-2">{p.location}</td>
-                <td className="px-2 py-2 font-semibold">${p.sales.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                <td className="px-2 py-2 font-semibold">{formatAmount(p.sales)}</td>
                 <td className="px-2 py-2">
-                  {p.topProducts.length === 0 ? (
+                  {!p.topProducts || p.topProducts.length === 0 ? (
                     <span className="text-muted-foreground">No products</span>
                   ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="px-2 py-1 text-xs h-auto"
-                      onClick={() => openModal(p.topProducts, { name: p.name, avatar: p.avatar })}
-                      type="button"
-                    >
-                      View Products
-                    </Button>
+                    <div className="flex flex-wrap gap-1">
+                      {p.topProducts.slice(0, 2).map((product, index) => (
+                        <span
+                          key={index}
+                          className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-800"
+                        >
+                          {product.name} ({formatAmount(product.amount)})
+                        </span>
+                      ))}
+                      {p.topProducts.length > 2 && (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-600">
+                          +{p.topProducts.length - 2} more
+                        </span>
+                      )}
+                    </div>
                   )}
                 </td>
               </tr>
@@ -138,7 +159,7 @@ export const TopPerformersTable = ({ performers, total, page, pageSize, setPage,
                   )}
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-base truncate">{tp.name}</div>
-                    <div className="text-blue-700 font-bold text-lg">${tp.amount.toLocaleString()}</div>
+                    <div className="text-blue-700 font-bold text-lg">{formatAmount(tp.amount)}</div>
                     {tp.quantity !== undefined && <div className="text-xs text-muted-foreground mt-1">Quantity: {tp.quantity}</div>}
                   </div>
                 </div>

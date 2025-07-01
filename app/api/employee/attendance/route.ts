@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma';
 import { consumeRateLimit } from '@/lib/rateLimiter';
 import { notifyUserOrEmployee } from "@/lib/notifications";
 import { SessionWithAdmin } from "@/lib/types";
+import { getAttendanceSettings, isWithinCheckInWindow, determineAttendanceStatus } from '@/lib/attendance-settings';
 
 // Add at the top:
 interface SessionWithAdmin {
@@ -118,12 +119,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, serverNow: new Date().toISOString() });
   }
   // --- NORMAL CHECK-IN LOGIC ---
-  // Enforce check-in window (7:00–20:00) -- TEMPORARY for testing
-  const windowStart = new Date(now);
-  const windowEnd = new Date(now); windowEnd.setHours(20, 0, 0, 0); // <-- was 17, now 20 for testing
-  if (now < windowStart || now > windowEnd) {
-    return NextResponse.json({ error: "Check-in only allowed between 7:00 and 20:00" }, { status: 403 });
+  // Get attendance settings from database
+  const attendanceSettings = await getAttendanceSettings();
+  
+  // Check if check-in is within allowed window
+  if (!isWithinCheckInWindow(now, attendanceSettings)) {
+    return NextResponse.json({ 
+      error: `Check-in only allowed between ${attendanceSettings.checkInWindowStart} and ${attendanceSettings.checkInWindowEnd}` 
+    }, { status: 403 });
   }
+  
+  // Determine attendance status based on check-in time
+  const checkInTime = checkIn ? new Date(checkIn) : new Date();
+  const attendanceStatus = determineAttendanceStatus(checkInTime, null, attendanceSettings);
+  
   if (existing) {
     if (existing.checkIn || existing.checkInUndone) {
       return NextResponse.json({ error: "Check-in not allowed (already checked in or undo used)" }, { status: 403 });
@@ -131,7 +140,13 @@ export async function POST(req: NextRequest) {
     // If record exists but no checkIn and not undone, allow check-in
     const updated = await prisma.attendance.update({
       where: { id: existing.id },
-      data: { checkIn: checkIn ? new Date(checkIn) : new Date(), checkInUndone: false, status: "Present", notes: notes || null, date: utcMidnight },
+      data: { 
+        checkIn: checkInTime, 
+        checkInUndone: false, 
+        status: attendanceStatus, 
+        notes: notes || null, 
+        date: utcMidnight 
+      },
     });
     // Notify admin of check-in
     const adminUser = await prisma.user.findFirst({ where: { role: "admin" } });
@@ -139,7 +154,7 @@ export async function POST(req: NextRequest) {
       await notifyUserOrEmployee({
         userId: adminUser.id,
         type: "employee_attendance_checkin",
-        message: `${employee.user.name || employee.user.email} checked in at ${new Date(updated.checkIn!).toLocaleTimeString()} on ${new Date(updated.date).toLocaleDateString()}.`,
+        message: `${employee.user.name || employee.user.email} checked in at ${new Date(updated.checkIn!).toLocaleTimeString()} on ${new Date(updated.date).toLocaleDateString()} (Status: ${attendanceStatus}).`,
         actionUrl: `/admin/attendance?employeeId=${employee.id}`,
         actionLabel: "View Attendance",
       });
@@ -151,8 +166,8 @@ export async function POST(req: NextRequest) {
     data: {
       employeeId: employee.id,
       date: utcMidnight,
-      checkIn: checkIn ? new Date(checkIn) : new Date(),
-      status: "Present",
+      checkIn: checkInTime,
+      status: attendanceStatus,
       notes: notes || null,
     },
   });
@@ -162,7 +177,7 @@ export async function POST(req: NextRequest) {
     await notifyUserOrEmployee({
       userId: adminUser.id,
       type: "employee_attendance_checkin",
-      message: `${employee.user.name || employee.user.email} checked in at ${new Date(record.checkIn!).toLocaleTimeString()} on ${new Date(record.date).toLocaleDateString()}.`,
+      message: `${employee.user.name || employee.user.email} checked in at ${new Date(record.checkIn!).toLocaleTimeString()} on ${new Date(record.date).toLocaleDateString()} (Status: ${attendanceStatus}).`,
       actionUrl: `/admin/attendance?employeeId=${employee.id}`,
       actionLabel: "View Attendance",
     });

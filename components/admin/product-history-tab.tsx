@@ -15,6 +15,8 @@ import useSWR from "swr"
 import * as XLSX from 'xlsx'
 import { useToast } from '@/components/ui/use-toast'
 import { Skeleton } from "@/components/ui/skeleton"
+import { adminFetcher } from "@/lib/admin-api-client"
+import { useCurrency } from "@/components/providers/currency-provider"
 
 export default function HistoryTab() {
   const [searchTerm, setSearchTerm] = useState("")
@@ -39,12 +41,13 @@ export default function HistoryTab() {
   })
 
   // Fetch all employees and products for dropdowns
-  const { data: employeesData } = useSWR("/api/employees?page=1&pageSize=1000", url => fetch(url).then(res => res.json()))
-  const { data: productsData } = useSWR("/api/products?page=1&pageSize=1000", url => fetch(url).then(res => res.json()))
+  const { data: employeesData } = useSWR("/api/employees?page=1&pageSize=1000", adminFetcher)
+  const { data: productsData } = useSWR("/api/products?page=1&pageSize=1000", adminFetcher)
   const allEmployees = employeesData?.employees || []
   const allProducts = productsData?.products || []
 
   const { toast } = useToast()
+  const { formatAmount } = useCurrency()
 
   const filteredHistory = assignments.filter((entry) => {
     // Search
@@ -196,6 +199,7 @@ export default function HistoryTab() {
           </div>
         )}
         <div className="rounded-md border max-h-[400px] overflow-y-auto">
+          <div className="overflow-x-auto">
           <Table className="min-w-full">
             <TableHeader className="sticky top-0 bg-white z-10">
               <TableRow>
@@ -233,14 +237,15 @@ export default function HistoryTab() {
                     <TableCell>{entry.employeeName}</TableCell>
                     <TableCell>{entry.productName}</TableCell>
                     <TableCell>{entry.quantity}</TableCell>
-                    <TableCell>${entry.productPrice.toFixed(2)}</TableCell>
-                    <TableCell>${entry.totalValue.toFixed(2)}</TableCell>
+                    <TableCell>{formatAmount(entry.productPrice)}</TableCell>
+                    <TableCell>{formatAmount(entry.totalValue)}</TableCell>
                     <TableCell>{new Date(entry.assignedAt).toLocaleDateString()}</TableCell>
                   </TableRow>
                 ))
               )}
             </TableBody>
           </Table>
+          </div>
         </div>
         <div className="flex flex-col md:flex-row justify-between items-center gap-2 mt-4">
           <div className="flex items-center gap-2">

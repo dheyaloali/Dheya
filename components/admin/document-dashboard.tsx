@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, Suspense } from "react"
 import { Search } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -15,10 +15,11 @@ import dynamic from "next/dynamic"
 import { Dialog } from "@/components/ui/dialog"
 import { X } from "lucide-react"
 import DocumentDeleteRequestsTable from "./document-delete-requests-table"
+import { adminFetcher, fetchWithCSRF } from "@/lib/admin-api-client"
 
 const PDFViewer = dynamic<{ url: string }>(() => import("./pdf-viewer"), { ssr: false });
 
-export default function DocumentDashboard() {
+function DocumentDashboardInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
@@ -66,19 +67,16 @@ export default function DocumentDashboard() {
   
   console.log(url); // Debug: log the SWR key
 
-  const { data, error, isLoading, mutate } = useSWR(url, (url) => fetch(url).then(res => {
-    if (!res.ok) throw new Error("Failed to fetch documents");
-    return res.json();
-  }));
+  const { data, error, isLoading, mutate } = useSWR(url, adminFetcher);
   // Filter out documents of type 'report' and ensure id is a number
-  const documents: Document[] = (data?.documents || [])
+  const documents: Document[] = React.useMemo(() => (data?.documents || [])
     .filter((doc: any) => doc.type !== 'report')
     .map((doc: any) => ({
       ...doc,
       id: Number(doc.id),
       fileUrl: doc.fileUrl ? String(doc.fileUrl) : "",
-    }));
-  const pagination = data?.pagination || { page: 1, limit: pageSize, total: 0, totalPages: 0 };
+    })), [data]);
+  const pagination = React.useMemo(() => data?.pagination || { page: 1, limit: pageSize, total: 0, totalPages: 0 }, [data, pageSize]);
 
   // Handle search with debounce
   useEffect(() => {
@@ -94,13 +92,13 @@ export default function DocumentDashboard() {
     return () => clearTimeout(timeoutId);
   }, [searchTerm]);
 
-  // Handle document actions
-  const handleDownload = (id: string) => {
+  // Memoize handlers
+  const handleDownload = React.useCallback((id: string) => {
     const document = documents.find((doc) => doc.id.toString() === id);
     if (document && document.fileUrl) {
       window.open(document.fileUrl, '_blank');
     }
-  };
+  }, [documents]);
 
   // Track deleting state to prevent multiple submissions
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -121,7 +119,7 @@ export default function DocumentDashboard() {
         description: "Please wait...",
       });
       
-      const response = await fetch(`/api/admin/documents/${id}`, {
+      const response = await fetchWithCSRF(`/api/admin/documents/${id}`, {
         method: "DELETE",
         headers: {
           "Cache-Control": "no-cache",
@@ -163,7 +161,7 @@ export default function DocumentDashboard() {
         description: "Please wait...",
       });
       
-      const response = await fetch(`/api/admin/documents/${id}`, {
+      const response = await fetchWithCSRF(`/api/admin/documents/${id}`, {
         method: "PUT",
         headers: { 
           "Content-Type": "application/json",
@@ -233,7 +231,7 @@ export default function DocumentDashboard() {
         description: "Please wait...",
       });
       
-      const response = await fetch("/api/admin/documents", {
+      const response = await fetchWithCSRF("/api/admin/documents", {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
@@ -262,41 +260,51 @@ export default function DocumentDashboard() {
   };
 
   return (
-    <div className="container mx-auto py-6">
-      <div className="flex flex-col space-y-8">
-        {/* Tab Switch */}
-        <div className="flex items-center gap-4 mb-2">
+    <div className="w-full pl-8 pt-0 pb-2 flex flex-col min-h-screen">
+      <div className="flex flex-col space-y-6 flex-1">
+        {/* Sticky Tab Switcher and Upload Button */}
+        <div className="sticky top-0 z-20 bg-white flex items-center gap-4 px-2 py-2 mb-2 shadow rounded-b-xl" style={{ minHeight: '48px' }}>
+          <div className="flex items-center gap-4" role="tablist" aria-label="Document Tabs">
           <button
             className={`px-4 py-2 rounded font-semibold border-b-2 transition-colors ${activeTab === 'documents' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-blue-700'}`}
             onClick={() => setActiveTab('documents')}
+              role="tab"
+              aria-selected={activeTab === 'documents'}
+              tabIndex={0}
           >
             Documents
           </button>
           <button
             className={`px-4 py-2 rounded font-semibold border-b-2 transition-colors ${activeTab === 'deleteRequests' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-blue-700'}`}
             onClick={() => setActiveTab('deleteRequests')}
+              role="tab"
+              aria-selected={activeTab === 'deleteRequests'}
+              tabIndex={0}
           >
             Delete Requests
           </button>
+          </div>
+          <div className="flex-1" />
+          <Button onClick={() => setIsUploadModalOpen(true)} aria-label="Upload Document">Upload Document</Button>
         </div>
         {/* Tab Content */}
         {activeTab === 'documents' ? (
           <>
-            {/* Existing Documents Table UI */}
-            <div className="flex items-center justify-between">
+            {/* دمج العنوان وشريط البحث في نفس البلوك */}
+            <div className="flex items-center justify-between mb-2">
               <h1 className="text-2xl font-bold tracking-tight">Documents</h1>
-              <Button onClick={() => setIsUploadModalOpen(true)}>Upload Document</Button>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Search className="h-5 w-5 text-gray-500" />
+              <div className="flex items-center space-x-2" role="search">
+                <Search className="h-5 w-5 text-gray-500" aria-hidden="true" />
               <Input
                 placeholder="Search documents..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full max-w-sm"
+                  aria-label="Search documents"
               />
+              </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 flex-1">
               <div className="md:col-span-1">
                 <DocumentFilters
                   selectedStatus={selectedStatus}
@@ -312,15 +320,15 @@ export default function DocumentDashboard() {
                   <DocumentTableSkeleton />
                 ) : error ? (
                   <div className="min-h-[240px] flex flex-col items-center justify-center border rounded bg-white">
-                    <div className="text-4xl text-red-300 mb-2">❌</div>
+                    <div className="text-4xl text-red-300 mb-2" aria-hidden="true">❌</div>
                     <div className="text-lg font-semibold text-red-500 mb-1">{error.message || String(error)}</div>
                     <div className="text-sm text-gray-400">Try refreshing or adjusting your filters.</div>
                   </div>
                 ) : documents.length === 0 ? (
                   <div className="min-h-[240px] flex flex-col items-center justify-center border rounded bg-white">
-                    <div className="text-4xl text-gray-300 mb-2">📄</div>
-                    <div className="text-lg font-semibold text-gray-500 mb-1">No documents found</div>
-                    <div className="text-sm text-gray-400">Try adjusting your filters or search.</div>
+                    <div className="text-4xl text-gray-300 mb-2" aria-hidden="true">📄</div>
+                    <div className="text-lg font-semibold text-gray-500 mb-1">لا توجد مستندات</div>
+                    <div className="text-sm text-gray-400">جرّب تغيير الفلاتر أو البحث.</div>
                   </div>
                 ) : (
                   <>
@@ -339,6 +347,7 @@ export default function DocumentDashboard() {
                           className="border rounded px-2 py-1 text-sm"
                           value={pageSize}
                           onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+                          aria-label="Rows per page"
                         >
                           {[5, 10, 20, 25, 50, 100].map(size => (
                             <option key={size} value={size}>{size}</option>
@@ -346,26 +355,30 @@ export default function DocumentDashboard() {
                         </select>
                       </div>
                       <div className="text-xs text-gray-500">Page {pagination.page} of {pagination.totalPages}</div>
-                      <div className="flex gap-2">
+                      <div className="flex gap-2" role="navigation" aria-label="Pagination">
                         <button
                           className="px-2 py-1 rounded border text-xs disabled:opacity-50"
                           onClick={() => setPage(1)}
                           disabled={pagination.page === 1}
+                          aria-label="First page"
                         >First</button>
                         <button
                           className="px-2 py-1 rounded border text-xs disabled:opacity-50"
                           onClick={() => setPage(p => Math.max(1, p - 1))}
                           disabled={pagination.page === 1}
+                          aria-label="Previous page"
                         >Prev</button>
                         <button
                           className="px-2 py-1 rounded border text-xs disabled:opacity-50"
                           onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
                           disabled={pagination.page === pagination.totalPages || pagination.totalPages === 0}
+                          aria-label="Next page"
                         >Next</button>
                         <button
                           className="px-2 py-1 rounded border text-xs disabled:opacity-50"
                           onClick={() => setPage(pagination.totalPages)}
                           disabled={pagination.page === pagination.totalPages || pagination.totalPages === 0}
+                          aria-label="Last page"
                         >Last</button>
                       </div>
                     </div>
@@ -374,7 +387,7 @@ export default function DocumentDashboard() {
                       {selectedDocument && (
                         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
                           <div className="bg-white rounded-lg shadow-lg max-w-3xl w-full max-h-[90vh] flex flex-col relative">
-                            <button className="absolute top-2 right-2 p-2" onClick={() => setSelectedDocument(null)}>
+                            <button className="absolute top-2 right-2 p-2" onClick={() => setSelectedDocument(null)} aria-label="Close PDF preview">
                               <X className="h-6 w-6 text-gray-500" />
                             </button>
                             <div className="p-4 border-b font-semibold text-lg truncate">{selectedDocument.title}</div>
@@ -405,3 +418,11 @@ export default function DocumentDashboard() {
     </div>
   );
 }
+
+const SuspenseWrapper = () => (
+  <Suspense fallback={<div>Loading documents...</div>}>
+    <DocumentDashboardInner />
+  </Suspense>
+);
+
+export default SuspenseWrapper;

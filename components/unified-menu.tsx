@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetClose, SheetTitle } from "@/components/ui/sheet"
 import { useBreakpoint } from "@/hooks/use-responsive"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { getAvatarImage, getAvatarInitials } from "@/lib/avatar-utils"
 
 interface UnifiedMenuProps {
   userType: "admin" | "employee"
@@ -147,8 +148,14 @@ export function UnifiedMenu({ userType, user, onLogout }: UnifiedMenuProps) {
             <div className="border-t p-4">
               <div className="flex items-center gap-2">
                 <Avatar>
-                  <AvatarImage src="/placeholder-user.png" alt={user?.name} />
-                  <AvatarFallback>{user?.name?.charAt(0)}</AvatarFallback>
+                  <AvatarImage 
+                    src={getAvatarImage({ 
+                      image: user?.image, 
+                      pictureUrl: user?.employee?.pictureUrl 
+                    })} 
+                    alt={user?.name} 
+                  />
+                  <AvatarFallback>{getAvatarInitials(user?.name)}</AvatarFallback>
                 </Avatar>
                 <div className="flex flex-col">
                   <span className="text-sm font-medium">{user?.name}</span>

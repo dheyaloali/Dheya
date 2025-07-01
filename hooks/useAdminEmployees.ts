@@ -2,6 +2,7 @@
 
 import useSWR from "swr";
 import { useState } from "react";
+import { adminFetcher } from "@/lib/admin-api-client";
 
 // Define response types
 export interface Employee {
@@ -35,8 +36,6 @@ export interface EmployeesResponse {
   pageCount: number;
 }
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
-
 export function useAdminEmployees(initialPage = 1, initialPageSize = 10, search = "", city = "All") {
   const [page, setPage] = useState(initialPage);
   const [pageSize, setPageSize] = useState(initialPageSize);
@@ -59,8 +58,8 @@ export function useAdminEmployees(initialPage = 1, initialPageSize = 10, search 
   // Create the full URL
   const url = `/api/admin/employees?${queryParams.toString()}`;
 
-  // Fetch data using SWR
-  const { data, error, isLoading, mutate } = useSWR<EmployeesResponse>(url, fetcher);
+  // Fetch data using SWR with CSRF-protected adminFetcher
+  const { data, error, isLoading, mutate } = useSWR<EmployeesResponse>(url, adminFetcher);
 
   // Change page handler
   const handlePageChange = (newPage: number) => {

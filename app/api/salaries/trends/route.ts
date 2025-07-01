@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/auth-guard";
 
-export async function GET(req: NextRequest) {
+export async function GET(req: import('next/server').NextRequest) {
   try {
     const auth = await requireAuth(req, true);
     if (!auth.ok) {
@@ -72,7 +72,6 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(result);
   } catch (error) {
-    console.error('Error in salary trends API:', error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'An unexpected error occurred' },
       { status: 500 }

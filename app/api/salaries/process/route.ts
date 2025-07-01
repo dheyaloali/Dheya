@@ -102,7 +102,6 @@ export async function POST(req: NextRequest) {
   if (totalWorkedHours !== undefined && (typeof totalWorkedHours !== 'number' || totalWorkedHours < 0)) validationErrors.push('Total worked hours must be a non-negative number.');
   if (absentDays !== undefined && (typeof absentDays !== 'number' || absentDays < 0)) validationErrors.push('Absent days must be a non-negative number.');
   if (validationErrors.length > 0) {
-    console.error('Salary process validation error:', validationErrors);
     return NextResponse.json({ error: validationErrors.join(' ') }, { status: 400 });
   }
 
@@ -116,7 +115,6 @@ export async function POST(req: NextRequest) {
 
   // Prevent negative salary
   if (totalSalary < 0) {
-    console.error('Total salary is negative. Check input values.', { totalSalary, employeeId: employeeIdInt });
     return NextResponse.json({ error: 'Total salary cannot be negative. Please review the input values.' }, { status: 400 });
   }
 
@@ -132,20 +130,36 @@ export async function POST(req: NextRequest) {
     absentDays: usedAbsentDays,
   };
 
-  // Create salary record
-  const salary = await prisma.salary.create({
-    data: {
-      employeeId: employeeIdInt,
-      amount: totalSalary,
-      status: "paid",
-      payDate: startOfMonth,
-      startDate: startOfMonth,
-      endDate: endOfMonth,
-      metadata: breakdown, // Store the breakdown in metadata instead of as a separate field
-    },
+  // Use transaction for database operations
+  const salary = await prisma.$transaction(async (tx) => {
+    // Create salary record
+    const createdSalary = await tx.salary.create({
+      data: {
+        employeeId: employeeIdInt,
+        amount: totalSalary,
+        status: "paid",
+        payDate: startOfMonth,
+        startDate: startOfMonth,
+        endDate: endOfMonth,
+        metadata: breakdown, // Store the breakdown in metadata instead of as a separate field
+      },
+    });
+    
+    // Audit log: log salary creation
+    await tx.salaryAuditLog.create({
+      data: {
+        salaryId: createdSalary.id,
+        action: 'create',
+        oldValue: undefined, // <-- use undefined, not null
+        newValue: createdSalary,
+        changedBy: auth.session?.user?.email ?? 'admin',
+      }
+    });
+    
+    return createdSalary;
   });
 
-  // Get employee and admin info for notifications
+  // Get employee and admin info for notifications - do this outside transaction
   const employee = await prisma.employee.findUnique({
     where: { id: employeeIdInt },
     include: { user: true }
@@ -162,9 +176,10 @@ export async function POST(req: NextRequest) {
         actionUrl: "/employee/salary",
         actionLabel: "View Salary",
         broadcastToEmployee: true,
+        skipRealtime: true // Add skipRealtime flag to avoid errors when WS server is down
       });
     } catch (notifyErr) {
-      console.error("[Notification] Failed to notify employee of salary creation:", notifyErr);
+      // Empty catch block
     }
   }
 
@@ -178,37 +193,12 @@ export async function POST(req: NextRequest) {
         actionUrl: `/admin/salaries`,
         actionLabel: "View Salaries",
         broadcastToAdmin: true,
+        skipRealtime: true // Add skipRealtime flag to avoid errors when WS server is down
       });
     } catch (notifyErr) {
-      console.error("[Notification] Failed to notify admin of salary creation:", notifyErr);
+      // Empty catch block
     }
   }
-
-  // Audit log: log salary creation
-  await prisma.salaryAuditLog.create({
-    data: {
-      salaryId: salary.id,
-      action: 'create',
-      oldValue: undefined, // <-- use undefined, not null
-      newValue: salary,
-      changedBy: auth.session?.user?.email ?? 'admin',
-    }
-  });
-
-  // Logging: log every salary payment
-  console.log(`Salary paid: employeeId=${employeeIdInt}, amount=${totalSalary}, breakdown=`, {
-    baseSalary: usedBaseSalary,
-    salesTotal: usedSalesTotal,
-    bonus,
-    totalWorkedHours: usedTotalWorkedHours,
-    overtimeHours,
-    overtimeBonus,
-    undertimeHours,
-    undertimeDeduction: undertimeDeductionTotal,
-    absentDays: usedAbsentDays,
-    absenceDeduction: absenceDeductionTotal,
-    totalSalary,
-  });
 
   return NextResponse.json({
     employeeId,

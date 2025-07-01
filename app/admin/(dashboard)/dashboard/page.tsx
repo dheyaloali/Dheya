@@ -10,9 +10,8 @@ export default async function AdminDashboard() {
   if (!session || !session.user?.isAdmin) {
     redirect("/login")
   }
-  if (session.user.mfaEnabled === false) {
-    redirect("/setup-mfa")
-  }
+  // MFA check is now handled in middleware
+  // No need to check here and cause double redirects
 
   return <AdminDashboardClient />
 }

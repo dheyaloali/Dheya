@@ -122,4 +122,4 @@ export async function DELETE(req: NextRequest, context: any) {
     console.error("Error deleting product:", error);
     return NextResponse.json({ error: "Failed to delete product" }, { status: 500 });
   }
-} 
+}

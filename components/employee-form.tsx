@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils"
 import { useForm, FormProvider } from "react-hook-form"
 import { Form, FormField, FormItem, FormControl, FormDescription, FormMessage } from "@/components/ui/form"
 import { useToast } from "@/components/ui/use-toast"
+import { sanitizeInput } from "@/lib/sanitizeInput"
 
 const cities = [
   "Jakarta", "Surabaya", "Bandung"
@@ -72,37 +73,80 @@ export function EmployeeForm({ onSuccess }: { onSuccess?: () => void | Promise<v
     email: { loading: false, available: true, message: "" }
   });
 
-  // Helper to check uniqueness with status update
-  const handleUniqueCheck = async (field: "name" | "email", value: string) => {
+  // Add local state for validation errors
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [emailError, setEmailError] = useState<string | null>(null);
+
+  // Helper for name validation
+  const validateName = (value: string) => {
+    const sanitized = sanitizeInput(value);
+    if (!sanitized) return "Name is required";
+    if (!/^[A-Za-z\s]+$/.test(sanitized)) return "Name must contain only letters and spaces";
+    return null;
+  };
+
+  // Helper for email validation
+  const validateEmail = (value: string) => {
+    if (!value) return "Email is required";
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) return "Invalid email format";
+    return null;
+  };
+
+  // Helper to check uniqueness and return result
+  const checkUnique = async (field: "name" | "email", value: string) => {
+    // Clear previous errors
+    clearErrors(field);
+    
+    // Set loading state
     setUniqueStatus(prev => ({
       ...prev,
-      [field]: { ...prev[field], loading: true, message: "Checking..." }
+      [field]: { ...prev[field], loading: true }
     }));
-    if (!value) {
+    
+    // Skip check if value is empty
+    if (!value || value.trim() === '') {
       setUniqueStatus(prev => ({
         ...prev,
         [field]: { ...prev[field], loading: false, available: true, message: "" }
       }));
-      return;
+      return true;
     }
-    const res = await fetch("/api/check-unique", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ field, value }),
-    });
-    const data = await res.json();
-    setUniqueStatus(prev => ({
-      ...prev,
-      [field]: {
-        loading: false,
-        available: data.available,
-        message: data.available ? "" : (field === "name" ? "Name already exists" : "Email already exists")
+    
+    // Use trimmed value for API call
+    const trimmedValue = value.trim();
+    
+    try {
+      const res = await fetch("/api/check-unique", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ field, value: trimmedValue }),
+      });
+      
+      const data = await res.json();
+      
+      setUniqueStatus(prev => ({
+        ...prev,
+        [field]: {
+          loading: false,
+          available: data.available,
+          message: data.available ? "" : (field === "name" ? "Name already exists" : "Email already exists")
+        }
+      }));
+      
+      if (!data.available) {
+        setError(field, { type: "manual", message: data.message || (field === "name" ? "Name already exists" : "Email already exists") });
+        return false;
+      } else {
+        clearErrors(field);
+        return true;
       }
-    }));
-    if (!data.available) {
-      setError(field, { type: "manual", message: data.message || (field === "name" ? "Name already exists" : "Email already exists") });
-    } else {
-      clearErrors(field);
+    } catch (error) {
+      console.error(`Error checking ${field} uniqueness:`, error);
+      setUniqueStatus(prev => ({
+        ...prev,
+        [field]: { loading: false, available: true, message: "" }
+      }));
+      return true; // Allow form submission on API error
     }
   };
 
@@ -121,14 +165,10 @@ export function EmployeeForm({ onSuccess }: { onSuccess?: () => void | Promise<v
       setLoading(false);
       return;
     }
-    // Use uniqueStatus instead of checkUnique
-    if (!uniqueStatus.name.available) {
-      setError("name", { type: "manual", message: "Name already exists" });
-      setLoading(false);
-      return;
-    }
-    if (!uniqueStatus.email.available) {
-      setError("email", { type: "manual", message: "Email already exists" });
+    // Final awaited uniqueness check for both fields
+    const nameOk = await checkUnique("name", data.name);
+    const emailOk = await checkUnique("email", data.email);
+    if (!nameOk || !emailOk) {
       setLoading(false);
       return;
     }
@@ -174,15 +214,25 @@ export function EmployeeForm({ onSuccess }: { onSuccess?: () => void | Promise<v
                     <Input
                       placeholder="Enter full name"
                       {...field}
-                      onBlur={e => { field.onBlur?.(e); handleUniqueCheck("name", e.target.value); }}
-                      onChange={e => { field.onChange(e); handleUniqueCheck("name", e.target.value); }}
+                      onBlur={e => {
+                        field.onBlur?.(e);
+                        checkUnique("name", e.target.value);
+                      }}
+                      onChange={e => {
+                        field.onChange(e);
+                        checkUnique("name", e.target.value);
+                      }}
                     />
                   </FormControl>
-                  {uniqueStatus.name.loading && (
+                  {nameError && <span className="block text-xs text-red-500 mt-1">{nameError}</span>}
+                  {uniqueStatus.name.loading && !nameError && (
                     <span className="block text-xs text-blue-500 mt-1">Checking...</span>
                   )}
-                  {!uniqueStatus.name.loading && field.value && (
-                    <span className={`block text-xs mt-1 ${uniqueStatus.name.available ? 'text-green-500' : 'text-red-500'}`}>{uniqueStatus.name.available ? 'Available' : 'Not available'}</span>
+                  {!uniqueStatus.name.loading && field.value && uniqueStatus.name.available && !nameError && (
+                    <span className="block text-xs mt-1 text-green-500">Available</span>
+                  )}
+                  {!uniqueStatus.name.loading && field.value && !uniqueStatus.name.available && !nameError && (
+                    <span className="block text-xs mt-1 text-red-500">Not available</span>
                   )}
                   <FormMessage />
                 </FormItem>
@@ -197,15 +247,25 @@ export function EmployeeForm({ onSuccess }: { onSuccess?: () => void | Promise<v
                       type="email"
                       placeholder="employee@example.com"
                       {...field}
-                      onBlur={e => { field.onBlur?.(e); handleUniqueCheck("email", e.target.value); }}
-                      onChange={e => { field.onChange(e); handleUniqueCheck("email", e.target.value); }}
+                      onBlur={e => {
+                        field.onBlur?.(e);
+                        checkUnique("email", e.target.value);
+                      }}
+                      onChange={e => {
+                        field.onChange(e);
+                        checkUnique("email", e.target.value);
+                      }}
                     />
                   </FormControl>
-                  {uniqueStatus.email.loading && (
+                  {emailError && <span className="block text-xs text-red-500 mt-1">{emailError}</span>}
+                  {uniqueStatus.email.loading && !emailError && (
                     <span className="block text-xs text-blue-500 mt-1">Checking...</span>
                   )}
-                  {!uniqueStatus.email.loading && field.value && (
-                    <span className={`block text-xs mt-1 ${uniqueStatus.email.available ? 'text-green-500' : 'text-red-500'}`}>{uniqueStatus.email.available ? 'Available' : 'Not available'}</span>
+                  {!uniqueStatus.email.loading && field.value && uniqueStatus.email.available && !emailError && (
+                    <span className="block text-xs mt-1 text-green-500">Available</span>
+                  )}
+                  {!uniqueStatus.email.loading && field.value && !uniqueStatus.email.available && !emailError && (
+                    <span className="block text-xs mt-1 text-red-500">Not available</span>
                   )}
                   <FormMessage />
                 </FormItem>
@@ -295,8 +355,12 @@ export function EmployeeForm({ onSuccess }: { onSuccess?: () => void | Promise<v
             />
           </div>
         </div>
-        <Button type="submit" className="w-full" disabled={loading || !uniqueStatus.name.available || !uniqueStatus.email.available}>
-          {loading ? "Saving..." : "Add Employee"}
+        <Button
+          type="submit"
+          disabled={loading || uniqueStatus.name.loading || uniqueStatus.email.loading}
+          className="w-full"
+        >
+          {loading ? "Adding..." : "Add Employee"}
         </Button>
     </form>
     </FormProvider>

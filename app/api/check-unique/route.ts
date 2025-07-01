@@ -3,7 +3,37 @@ import { prisma } from "@/lib/prisma";
 
 export async function POST(req: NextRequest) {
   try {
-    const { field, value } = await req.json();
+    // Handle empty request body
+    const contentType = req.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      return NextResponse.json({ 
+        available: false, 
+        message: "invalidContentType" 
+      }, { status: 400 });
+    }
+
+    // Get the request body text first to check if it's empty
+    const text = await req.text();
+    if (!text) {
+      return NextResponse.json({ 
+        available: false, 
+        message: "emptyRequest" 
+      }, { status: 400 });
+    }
+
+    // Parse the JSON
+    let field, value;
+    try {
+      const body = JSON.parse(text);
+      field = body.field;
+      value = body.value;
+    } catch (error) {
+      console.error("JSON parse error:", error);
+      return NextResponse.json({ 
+        available: false, 
+        message: "invalidJSON" 
+      }, { status: 400 });
+    }
     
     // Validate required fields
     if (!field || !value) {
@@ -20,9 +50,9 @@ export async function POST(req: NextRequest) {
     let existing = null;
 
     if (field === "email") {
-      // Lowercase for case-insensitive check
+      // Case-insensitive check for email
       existing = await prisma.user.findFirst({
-        where: { email: trimmedValue.toLowerCase() }
+        where: { email: { equals: trimmedValue.toLowerCase(), mode: 'insensitive' } }
       });
       if (existing) return NextResponse.json({ 
         available: false, 

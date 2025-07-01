@@ -26,4 +26,4 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
 
   await prisma.documentDeleteRequest.delete({ where: { id: requestId } });
   return NextResponse.json({ success: true });
-} 
+}

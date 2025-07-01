@@ -124,7 +124,6 @@ export function EmployeeSettingsContent() {
 
     // Simulate API call
     setTimeout(() => {
-      console.log(values)
       setIsSaving(false)
       toast({
         title: "Profile updated",
@@ -145,7 +144,6 @@ export function EmployeeSettingsContent() {
 
     // Simulate API call
     setTimeout(() => {
-      console.log(values)
       setIsSaving(false)
       toast({
         title: "Notification preferences saved",
@@ -159,7 +157,6 @@ export function EmployeeSettingsContent() {
 
     // Simulate API call
     setTimeout(() => {
-      console.log(values)
       setIsSaving(false)
       toast({
         title: "Password updated",

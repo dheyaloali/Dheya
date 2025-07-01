@@ -35,6 +35,7 @@ import { Badge } from "@/components/ui/badge"
 import { EmployeeSettingsContent } from "@/components/employee/settings-content"
 import useSWR from 'swr'
 import { useTranslations } from "next-intl"
+import { getAvatarImage, getAvatarInitials } from "@/lib/avatar-utils"
 
 export function EmployeeProfileContent() {
   const t = useTranslations('Profile')
@@ -99,7 +100,6 @@ export function EmployeeProfileContent() {
   async function handleSave() {
     setFormError("")
     const phone = formData.personal.phone.trim()
-    console.log('Phone number to be sent:', phone)
     if (!/^\+62\d{9,13}$/.test(phone)) {
       setFormError("Phone number must be in Indonesian format: +62xxxxxxxxxxx")
       toast({
@@ -112,14 +112,12 @@ export function EmployeeProfileContent() {
     setIsSaving(true)
     try {
       const requestBody = { phoneNumber: phone }
-      console.log('Request body:', requestBody)
       const res = await fetch('/api/employee/profile', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
       })
       const result = await res.json()
-      console.log('API response:', result)
       if (!res.ok || result.error) {
         setFormError(result.error || 'Failed to update phone number')
         toast({
@@ -145,7 +143,6 @@ export function EmployeeProfileContent() {
         variant: "success"
       })
     } catch (err) {
-      console.error('Error updating phone number:', err)
       setFormError('Failed to update phone number')
       toast({
         title: "Update Failed",
@@ -215,9 +212,12 @@ export function EmployeeProfileContent() {
                   <div className="absolute -bottom-12 left-6">
                     <div className="relative">
                       <div className="h-24 w-24 rounded-full border-4 border-background bg-muted flex items-center justify-center overflow-hidden">
-                      {employee.pictureUrl ? (
+                      {employee.pictureUrl || employee.user?.image ? (
                         <img
-                          src={employee.pictureUrl}
+                          src={getAvatarImage({ 
+                            image: employee.user?.image, 
+                            pictureUrl: employee.pictureUrl 
+                          })}
                           alt={user.name || 'Employee photo'}
                           className="object-cover w-full h-full"
                         />

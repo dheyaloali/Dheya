@@ -13,4 +13,21 @@ declare module "next-auth" {
       isAdmin: boolean
     }
   }
+
+  interface User {
+    id: string
+    name: string
+    email: string
+    role: string
+    isApproved: boolean
+    mfaEnabled: boolean
+  }
+
+  interface JWT {
+    id: string
+    role: string
+    isApproved: boolean
+    mfaEnabled: boolean
+    isAdmin: boolean
+  }
 } 

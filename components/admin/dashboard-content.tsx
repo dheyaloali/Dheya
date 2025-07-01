@@ -4,12 +4,10 @@ import { useEffect, useState, useMemo, useCallback, useRef } from "react"
 import { ArrowUpRight, BarChart3, CalendarDays, DollarSign, FileText, MapPin, Users, Building2, Bell } from "lucide-react"
 import Link from "next/link"
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis, Cell } from "recharts"
-import html2canvas from "html2canvas"
-import * as XLSX from "xlsx"
-import XlsxPopulate from "xlsx-populate/browser/xlsx-populate"
 import { useSession } from "next-auth/react"
 import { useRouter } from "next/navigation"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import dynamic from 'next/dynamic'
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -27,6 +25,7 @@ import { TopPerformersTable, TopPerformersTableSkeleton } from "@/components/adm
 import { useTopPerformers } from "@/hooks/useTopPerformers"
 import { useAttendanceRecords } from "@/hooks/useAttendanceRecords"
 import { AttendanceRecordsTable, AttendanceRecordsTableSkeleton } from "@/components/admin/AttendanceRecordsTable"
+import { getAvatarImage, getAvatarInitials } from "@/lib/avatar-utils"
 
 // Types for dashboard data
 interface DashboardStats {
@@ -75,12 +74,15 @@ const TopPerformersList = ({ performers }: { performers: TopPerformer[] }) => (
       <div key={performer.id} className="flex items-center justify-between gap-8 pr-4">
         <div className="flex items-center min-w-0">
           <Avatar className="h-9 w-9 min-w-[2.25rem]">
-          <AvatarImage src={performer.avatar || "/abstract-geometric-shapes.png"} alt={performer.name} />
+          <AvatarImage 
+            src={getAvatarImage({ 
+              image: performer.user?.image, 
+              pictureUrl: performer.employee?.pictureUrl 
+            })} 
+            alt={performer.name} 
+          />
           <AvatarFallback>
-            {performer.name
-              .split(" ")
-              .map((n) => n[0])
-              .join("")}
+            {getAvatarInitials(performer.name)}
           </AvatarFallback>
         </Avatar>
           <div className="ml-4 space-y-1 min-w-0">
@@ -137,12 +139,15 @@ const AttendanceRecordsList = ({ records }: { records: AttendanceRecord[] }) => 
         <span className="text-muted-foreground">{record.id}</span>
         <div className="flex items-center gap-2">
           <Avatar className="h-8 w-8">
-            <AvatarImage src={record.avatar || "/abstract-geometric-shapes.png"} alt={record.name} />
+            <AvatarImage 
+              src={getAvatarImage({ 
+                image: record.user?.image, 
+                pictureUrl: record.employee?.pictureUrl 
+              })} 
+              alt={record.name} 
+            />
             <AvatarFallback>
-              {record.name
-                .split(" ")
-                .map((n) => n[0])
-                .join("")}
+              {getAvatarInitials(record.name)}
             </AvatarFallback>
           </Avatar>
           <span>{record.name}</span>
@@ -235,18 +240,8 @@ const CityLegend = ({ cities }: { cities: string[] }) => {
   );
 };
 
-// Mock API functions (simulating data fetching)
-const fetchDashboardStats = async (): Promise<DashboardStats> => {
-  const res = await fetch("/api/admin/dashboard-stats");
-  if (!res.ok) throw new Error("Failed to fetch dashboard stats");
-  return res.json();
-}
-
-const fetchTopPerformers = async (): Promise<TopPerformer[]> => {
-  const res = await fetch("/api/admin/top-performers");
-  if (!res.ok) throw new Error("Failed to fetch top performers");
-  return res.json();
-}
+// Import admin API client with CSRF protection
+import adminApiClient from "@/lib/admin-api-client";
 
 const fetchAttendanceRecords = async (): Promise<AttendanceRecord[]> => {
   const res = await fetch("/api/admin/dashboard/attendance/today");
@@ -263,7 +258,7 @@ const fetchAttendanceRecords = async (): Promise<AttendanceRecord[]> => {
   }));
 }
 
-function TopPerformersCard({ active }: { active: boolean }) {
+function TopPerformersCard({ active, loading }: { active: boolean; loading: boolean }) {
   const [selectedCity, setSelectedCity] = useState<string>('All');
   const {
     performers,
@@ -299,7 +294,7 @@ function TopPerformersCard({ active }: { active: boolean }) {
       </CardHeader>
       <CardContent style={{ padding: 0 }}>
         <div className="overflow-x-auto w-full max-w-full">
-          {isLoading ? <TopPerformersTableSkeleton /> : error ? (
+          {loading || isLoading ? <TopPerformersTableSkeleton /> : error ? (
             <div className="text-red-600 py-8 text-center">{error.message || 'Failed to load top performers'}</div>
           ) : (
             <TopPerformersTable
@@ -361,13 +356,24 @@ function AttendanceTabContent({ active }: { active: boolean }) {
   );
 }
 
+// Add dynamic import for ExportButton
+const ExportButton = dynamic(() => import('./ExportButton'), {
+  ssr: false,
+  loading: () => (
+    <Button variant="outline" disabled>
+      <FileText className="mr-2 h-4 w-4" />
+      Loading...
+    </Button>
+  ),
+});
+
 export function AdminDashboardContent() {
   const { data: session } = useSession();
   const router = useRouter();
 
   // Move all hooks here, before any return
   const [activeTab, setActiveTab] = useState("overview")
-  const { stats, isLoading: statsLoading, error: statsError } = useDashboardStats();
+  const { stats, isLoading: statsLoading, error: statsError, isMinimalData } = useDashboardStats();
   const currentYear = new Date().getFullYear();
   const [cityYear, setCityYear] = useState(currentYear);
   const years = Array.from({ length: 31 }, (_, i) => currentYear + i);
@@ -403,55 +409,24 @@ export function AdminDashboardContent() {
       {/* Dashboard header - static content, no skeleton needed */}
       <div className="sticky top-0 bg-background z-40 pt-4 pb-4 border-b shadow-sm transition-all duration-300 w-full mb-4">
         <div className="w-full px-4 md:px-6 flex flex-row items-center justify-between gap-4">
-          <h1 className="text-2xl font-bold">Admin Dashboard</h1>
-          <Button
-            variant="outline"
-            disabled={activeTab !== "sales"}
-            onClick={async () => {
-              alert("Your report is being generated. The download will start soon.");
-              let chartImage = "";
-              let attendanceChartImage = "";
-              // Products Sold by City chart
-              if (chartRef.current) {
-                const canvas = await html2canvas(chartRef.current);
-                chartImage = canvas.toDataURL("image/png");
-                console.log("ProductsByCityChart image base64 (first 100 chars):", chartImage.slice(0, 100));
-              }
-              // Attendance Overview chart
-              if (attendanceChartRef.current) {
-                const canvas = await html2canvas(attendanceChartRef.current);
-                attendanceChartImage = canvas.toDataURL("image/png");
-                console.log("AttendanceChart image base64 (first 100 chars):", attendanceChartImage.slice(0, 100));
-              }
-              const res = await fetch("/api/admin/export-dashboard", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ chartImage, attendanceChartImage }),
-              });
-              if (!res.ok) {
-                alert("Failed to export report. Please try again.");
-                return;
-              }
-              const blob = await res.blob();
-              const url = window.URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = "dashboard-report.pdf";
-              document.body.appendChild(a);
-              a.click();
-              a.remove();
-              window.URL.revokeObjectURL(url);
-            }}
-          >
-            <FileText className="mr-2 h-4 w-4" />
-            Export Reports
-          </Button>
+            <h1 className="text-2xl font-bold">Admin Dashboard</h1>
+            
+            {/* Replace the Button with ExportButton */}
+            <ExportButton 
+              chartRef={chartRef} 
+              attendanceChartRef={attendanceChartRef}
+              disabled={activeTab !== "sales"}
+            />
         </div>
-      </div>
+        </div>
 
       <div className="flex flex-col w-full">
         {/* Dynamic content with skeleton */}
-        <DashboardStatsCards stats={stats || defaultStats} loading={statsLoading} />
+        <DashboardStatsCards 
+          stats={stats || defaultStats} 
+          loading={statsLoading} 
+          isMinimalData={isMinimalData}
+        />
 
         {/* Rest of the dynamic content with appropriate skeleton loading */}
         <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4 mt-6">
@@ -463,11 +438,7 @@ export function AdminDashboardContent() {
 
           <TabsContent value="overview" className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-              {statsLoading ? (
-                <TopPerformersTableSkeleton />
-              ) : (
-              <TopPerformersCard active={activeTab === "overview"} />
-              )}
+              <TopPerformersCard active={activeTab === "overview"} loading={statsLoading} />
             </div>
           </TabsContent>
 
@@ -478,13 +449,9 @@ export function AdminDashboardContent() {
                 <CardDescription>Daily attendance records for the current month.</CardDescription>
               </CardHeader>
               <CardContent>
-                {statsLoading ? (
-                  <AttendanceRecordsTableSkeleton />
-                ) : (
-                  <div ref={attendanceChartRef}>
-                    <AttendanceChart />
-                  </div>
-                )}
+                <div ref={attendanceChartRef}>
+                  <AttendanceChart loading={statsLoading} />
+                </div>
               </CardContent>
             </Card>
             {statsLoading ? (
@@ -530,120 +497,149 @@ function SalesPerformanceChart({ year, view }: { year: number; view: 'city' | 'p
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCity, setSelectedCity] = useState<string>('All');
+  const [period, setPeriod] = useState<string>('monthly');
   const cityOptions = ['All', 'Jakarta', 'Surabaya', 'Bandung'];
+  const periodOptions = [
+    { value: 'monthly', label: 'Monthly' },
+    { value: 'quarterly', label: 'Quarterly' },
+    { value: 'yearly', label: 'Yearly' }
+  ];
 
   useEffect(() => {
     setLoading(true);
+    // Use the optimized endpoints with aggregation parameters
     const url = view === 'city'
-      ? `/api/admin/sales-by-city?year=${year}`
-      : `/api/admin/sales-by-product?year=${year}`;
+      ? `/api/admin/sales-by-city?year=${year}&period=${period}&limit=5`
+      : `/api/admin/sales-by-product?year=${year}&period=${period}&limit=10`;
+    
     fetch(url)
       .then(res => res.json())
       .then(resData => {
         let filtered = resData;
-        if (selectedCity && selectedCity !== 'All') {
+        if (selectedCity && selectedCity !== 'All' && view === 'city') {
           filtered = resData.filter((c: any) => c.city === selectedCity);
         }
-        if (view === 'city') {
-          setData(filtered);
-        } else {
-          setData(resData);
-        }
+        setData(filtered);
         setLoading(false);
       });
-  }, [year, view, selectedCity]);
+  }, [year, view, selectedCity, period]);
 
-  const customTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{
-          background: 'white',
-          border: '1px solid #e5e7eb',
-          borderRadius: 12,
-          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-          padding: '12px 18px',
-          fontSize: 15,
-          fontWeight: 500,
-        }}>
-          <div style={{ marginBottom: 6, color: '#6366f1', fontWeight: 600 }}>{label}</div>
-          {payload.map((entry: any, idx: number) => (
-            <div key={idx} style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-              <span style={{
-                display: 'inline-block',
-                width: 12,
-                height: 12,
-                borderRadius: 3,
-                background: entry.color,
-                marginRight: 8,
-                border: '1px solid #e5e7eb',
-              }} />
-              <span style={{ color: '#333', fontWeight: 500, marginRight: 8 }}>{entry.name || entry.dataKey}:</span>
-              <span style={{ color: '#6366f1', fontWeight: 600 }}>${Number(entry.value).toLocaleString()}</span>
-            </div>
-          ))}
-        </div>
-      );
-    }
-    return null;
-  };
+  // Skeleton data for loading state
+  const skeletonData = Array.from({ length: period === 'yearly' ? 1 : period === 'quarterly' ? 4 : 12 }).map((_, i) => {
+    const entry: any = { 
+      period: period === 'yearly' ? year.toString() : 
+             period === 'quarterly' ? `Q${i + 1}` : 
+             `M${i + 1}`
+    };
+    cityOptions.forEach(city => {
+      if (city !== 'All') entry[city] = 0;
+    });
+    return entry;
+  });
 
-  if (loading) {
-    return <div className="h-full w-full flex items-center justify-center"><Skeleton className="h-[250px] w-full" /></div>;
-  }
+  // Transform data based on the response format
+  const chartData = loading ? skeletonData : (
+    view === 'city' && data.length > 0 ? 
+      // City view - transform data for chart
+      data[0].data.map((periodData: any, i: number) => {
+        const entry: any = { period: periodData.period };
+        data.forEach((cityData: any) => {
+          entry[cityData.city] = cityData.data[i].totalSales;
+        });
+        return entry;
+      }) : 
+    // Product view - transform data for chart
+    view === 'product' && data.length > 0 && data[0].data ? 
+      data[0].data.map((periodData: any, i: number) => {
+        const entry: any = { period: periodData.period };
+        data.forEach((productData: any) => {
+          entry[productData.product] = productData.data[i].totalSales;
+        });
+        return entry;
+      }) :
+    // Fallback for yearly product view or empty data
+    []
+  );
 
   const chartPadding = { top: 24, right: 24, left: 24, bottom: 24 };
+  
+  // Extract keys for the chart
+  const keys = view === 'city' ? 
+    data.length > 0 ? data.map(item => item.city) : cityOptions.filter(c => c !== 'All') :
+    data.length > 0 ? data.map(item => item.product).slice(0, 5) : [];
+  
+  const colors = ['#4f46e5', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#6366f1', '#06b6d4', '#22d3ee', '#fbbf24', '#f87171'];
 
-  if (view === 'city') {
-    const cities = data.length > 0 ? Object.keys(data[0]).filter(key => key !== 'month') : [];
-    const colors = ['#4f46e5', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444'];
-    return (
-      <div>
-        <div className="flex items-center gap-4 mb-4">
-          <label htmlFor="products-by-city-city" className="font-medium">City:</label>
-          <select
-            id="products-by-city-city"
-            value={selectedCity}
-            onChange={e => setSelectedCity(e.target.value)}
-            className="border rounded px-2 py-1 text-sm"
-          >
-            {cityOptions.map(city => (
-              <option key={city} value={city}>{city}</option>
-            ))}
-          </select>
-        </div>
-        <ResponsiveContainer width="100%" height={340}>
-          <BarChart data={data.length > 0 ? data[0].monthlySales.map((_: any, i: number) => {
-            const month = data[0].monthlySales[i].month;
-            const entry: any = { month };
-            data.forEach((cityData: any) => {
-              entry[cityData.city] = cityData.monthlySales[i].totalSales;
-            });
-            return entry;
-          }) : []} margin={{ ...chartPadding, bottom: 48 }} barCategoryGap={16}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis dataKey="month" stroke="#888" fontSize={15} fontWeight={600} tickLine={false} axisLine={false} angle={-30} textAnchor="end" height={48} />
-            <YAxis stroke="#888" fontSize={15} fontWeight={600} tickLine={false} axisLine={false} tickFormatter={v => `$${v}`} />
-            <Tooltip content={customTooltip} />
-            {data.map((cityData: any, idx: number) => (
-              <Bar key={cityData.city} dataKey={cityData.city} fill={colors[idx % colors.length]} />
-            ))}
-          </BarChart>
-        </ResponsiveContainer>
+  return (
+    <div>
+      <div className="flex items-center gap-4 mb-4 flex-wrap">
+        {view === 'city' && (
+          <>
+            <label htmlFor="products-by-city-city" className="font-medium">City:</label>
+            <select
+              id="products-by-city-city"
+              value={selectedCity}
+              onChange={e => setSelectedCity(e.target.value)}
+              className="border rounded px-2 py-1 text-sm"
+            >
+              {cityOptions.map(city => (
+                <option key={city} value={city}>{city}</option>
+              ))}
+            </select>
+          </>
+        )}
+        
+        <label htmlFor="data-period" className="font-medium ml-4">Period:</label>
+        <select
+          id="data-period"
+          value={period}
+          onChange={e => setPeriod(e.target.value)}
+          className="border rounded px-2 py-1 text-sm"
+        >
+          {periodOptions.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
       </div>
-    );
-  } else {
-    return (
-      <div>
-        <ResponsiveContainer width="100%" height={340}>
-          <BarChart data={data} margin={{ ...chartPadding, bottom: 48 }} barCategoryGap={16}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis dataKey="month" stroke="#888" fontSize={15} fontWeight={600} tickLine={false} axisLine={false} angle={-30} textAnchor="end" height={48} />
-            <YAxis stroke="#888" fontSize={15} fontWeight={600} tickLine={false} axisLine={false} tickFormatter={v => `$${v}`} />
-            <Tooltip content={customTooltip} />
-            <Bar dataKey="product" fill="#8884d8" />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    );
-  }
+      
+      <ResponsiveContainer width="100%" height={340}>
+        <BarChart 
+          data={chartData} 
+          margin={{ ...chartPadding, bottom: 48 }} 
+          barCategoryGap={16}
+        >
+          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <XAxis 
+            dataKey="period" 
+            stroke="#888" 
+            fontSize={15} 
+            fontWeight={600} 
+            tickLine={false} 
+            axisLine={false} 
+            angle={-30} 
+            textAnchor="end" 
+            height={48} 
+          />
+          <YAxis 
+            stroke="#888" 
+            fontSize={15} 
+            fontWeight={600} 
+            tickLine={false} 
+            axisLine={false} 
+            tickFormatter={v => `$${v}`} 
+          />
+          <Tooltip />
+          {keys.map((key, idx) => (
+            <Bar
+              key={key}
+              dataKey={key}
+              fill={colors[idx % colors.length]}
+              fillOpacity={loading ? 0.3 : 1}
+              isAnimationActive={!loading}
+            />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
 }

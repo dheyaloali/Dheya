@@ -11,6 +11,11 @@ import 'leaflet/dist/leaflet.css'
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import useSWR from 'swr';
+// Import MarkerClusterGroup for clustering
+import MarkerClusterGroup from 'react-leaflet-cluster'
+import 'leaflet.markercluster/dist/MarkerCluster.css'
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
+import { getAvatarImage, getAvatarInitials } from "@/lib/avatar-utils"
 
 // Fix Leaflet default marker icon issue
 import icon from 'leaflet/dist/images/marker-icon.png'
@@ -282,40 +287,26 @@ export function MapContainer({
     mapRef.current.fitBounds(bounds, { padding: [50, 50] });
   }
 
-  // Center map on selected employee when changed from sidebar, with debug log and validation
-  useEffect(() => {
-    if (
-      mapReady &&
-      mapRef.current &&
-      selectedEmployee &&
-      selectedEmployee.location?.latitude != null &&
-      selectedEmployee.location?.longitude != null
-    ) {
-      const lat = selectedEmployee.location.latitude;
-      const lng = selectedEmployee.location.longitude;
-      // Only center if coordinates are valid (not 0,0 and within bounds)
-      const isValidLat = typeof lat === 'number' && lat > -90 && lat < 90 && lat !== 0;
-      const isValidLng = typeof lng === 'number' && lng > -180 && lng < 180 && lng !== 0;
-      console.log('Centering on:', selectedEmployee.name, lat, lng, 'Valid:', isValidLat && isValidLng);
-      if (isValidLat && isValidLng) {
-        // Disable auto-fit when an employee is selected
-        setAutoFitEnabled(false);
-        mapRef.current.invalidateSize();
-        mapRef.current.setView(
-          [lat, lng],
-          15, // preferred zoom
-          { animate: true }
-        );
-      }
-    }
-  }, [selectedEmployee, mapReady, isFullscreen]);
-
   // Robustly fix map resizing issues
   useEffect(() => {
     if (mapReady && mapRef.current && mapRef.current.invalidateSize) {
       mapRef.current.invalidateSize();
     }
   }, [employees.length, isFullscreen, mapReady]);
+
+  // Center map on selected employee when they have valid coordinates
+  useEffect(() => {
+    if (mapReady && mapRef.current && selectedEmployee) {
+      const lat = parseFloat(selectedEmployee.latitude || '0');
+      const lng = parseFloat(selectedEmployee.longitude || '0');
+      const isValidLat = !isNaN(lat) && lat !== 0;
+      const isValidLng = !isNaN(lng) && lng !== 0;
+      
+      if (isValidLat && isValidLng) {
+        mapRef.current.setView([lat, lng], 14, { animate: true });
+      }
+    }
+  }, [selectedEmployee, mapReady]);
 
   // --- Robust history mode rendering ---
   // If locationHistory is present, draw polyline and markers
@@ -617,24 +608,39 @@ export function MapContainer({
             ))}
           </>
         )}
-        {/* --- Real-time mode: show employee markers as before --- */}
-        {!isHistoryMode && employees.map((emp, idx) => (
-          emp.location && (
-            <Marker
-              key={emp.id}
-              position={[emp.location.latitude, emp.location.longitude]}
-              icon={selectedEmployee && emp.id === selectedEmployee.id ? selectedSvgMarker : svgMarker}
-            >
-              <Popup>
-                <div>
-                  <b>{emp.name}</b><br />
-                  Lat: {emp.location.latitude}, Lng: {emp.location.longitude}<br />
-                  Battery: {emp.batteryLevel ?? '-'}
-                </div>
-              </Popup>
-            </Marker>
-          )
-        ))}
+        {/* --- Real-time mode: show employee markers with clustering --- */}
+        {!isHistoryMode && (
+          <MarkerClusterGroup
+            chunkedLoading
+            disableClusteringAtZoom={16}
+            spiderfyOnMaxZoom={true}
+            polygonOptions={{
+              fillColor: '#2563eb',
+              color: '#2563eb',
+              weight: 0.5,
+              opacity: 1,
+              fillOpacity: 0.2
+            }}
+          >
+            {employees.map((emp, idx) => (
+              emp.location && (
+                <Marker
+                  key={emp.id}
+                  position={[emp.location.latitude, emp.location.longitude]}
+                  icon={selectedEmployee && emp.id === selectedEmployee.id ? selectedSvgMarker : svgMarker}
+                >
+                  <Popup>
+                    <div>
+                      <b>{emp.name}</b><br />
+                      Lat: {emp.location.latitude}, Lng: {emp.location.longitude}<br />
+                      Battery: {emp.batteryLevel ?? '-'}
+                    </div>
+                  </Popup>
+                </Marker>
+              )
+            ))}
+          </MarkerClusterGroup>
+        )}
 
         <MapUpdater 
           employees={employees} 
@@ -652,11 +658,14 @@ export function MapContainer({
           <div className="flex items-center gap-3">
             <Avatar className="h-10 w-10">
               <AvatarImage
-                src={`/abstract-geometric-shapes.png?height=40&width=40&query=${selectedEmployee.name || ""}`}
+                src={getAvatarImage({ 
+                  image: selectedEmployee.user?.image, 
+                  pictureUrl: selectedEmployee.pictureUrl 
+                })}
                 alt={selectedEmployee.name || ""}
               />
               <AvatarFallback>
-                {(selectedEmployee.name || "").split(" ").map(n => n[0]).join("")}
+                {getAvatarInitials(selectedEmployee.name)}
               </AvatarFallback>
             </Avatar>
             <div>

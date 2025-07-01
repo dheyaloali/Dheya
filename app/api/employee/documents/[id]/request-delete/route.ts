@@ -61,7 +61,5 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       actionUrl: "/admin/employees",
       actionLabel: "Review Employees",
       sessionToken,
-    });
-  }
-  return NextResponse.json(request);
-} 
+  });
+}

@@ -14,7 +14,6 @@ const cache = new Map<string, { data: any, timestamp: number }>();
 // Logger for error tracking
 const logger = {
   error: (message: string, error: any) => {
-    console.error(`[${new Date().toISOString()}] ${message}:`, error);
     // TODO: Add your preferred logging service here
   }
 };
@@ -195,17 +194,9 @@ export async function GET(req: NextRequest) {
       }
     })
   } catch (error) {
-    // Log the error with proper context
-    logger.error('Dashboard error', {
-      error,
-      userId: error instanceof Error ? error.message : 'Unknown error',
-      timestamp: new Date().toISOString()
-    });
-    
-    // Return appropriate error response
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: "Failed to fetch dashboard data" },
       { status: 500 }
-    )
-} 
+    );
+  }
 } 

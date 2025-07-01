@@ -50,4 +50,4 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
 
   await prisma.report.delete({ where: { id } });
   return NextResponse.json({ success: true });
-} 
+}

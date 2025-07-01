@@ -1,10 +1,11 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { Check, X, Calendar, History, Clock, ShoppingCart } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import useSWR from "swr"
 import * as XLSX from "xlsx"
+import { adminFetcher, fetchWithCSRF } from "@/lib/admin-api-client"
 
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -12,6 +13,8 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { Badge } from "@/components/ui/badge"
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table"
 import { addDays, format } from "date-fns"
+import { Dialog, DialogContent, DialogHeader, DialogDescription, DialogFooter } from "@/components/ui/dialog"
+import { Textarea } from "@/components/ui/textarea"
 
 // --- Types ---
 interface Report {
@@ -141,17 +144,10 @@ export function ReportsContent() {
       });
   const url = `/api/admin/reports?${params.toString()}`;
 
-  const { data, error, isLoading, mutate } = useSWR(url, (url) => fetch(url, {
-    headers: {
-      "Cache-Control": "no-cache",
-      "Pragma": "no-cache"
-    }
-  }).then(res => {
-    if (!res.ok) throw new Error("Failed to fetch reports");
-    return res.json();
-  }));
+  const { data, error, isLoading, mutate } = useSWR(url, adminFetcher);
 
-  const reports: Report[] = data?.reports || [];
+  const [optimisticReports, setOptimisticReports] = useState<Report[] | null>(null);
+  const reports: Report[] = optimisticReports !== null ? optimisticReports : data?.reports || [];
   const totalPages = data?.totalPages || 1;
   const totalReports = data?.total || 0;
 
@@ -166,7 +162,6 @@ export function ReportsContent() {
 
   // --- Status update handler ---
   const handleStatusUpdate = async (reportId: string, newStatus: string) => {
-    // Prevent multiple submissions for the same report
     if (processingReportIds.has(reportId)) {
       toast({
         title: "Operation in progress",
@@ -175,38 +170,39 @@ export function ReportsContent() {
       });
       return;
     }
-    
-    // Add to processing set
     setProcessingReportIds(prev => new Set(prev).add(reportId));
-    
+    // Optimistically update the report status
+    const prevReports = reports;
+    setOptimisticReports(
+      reports.map(r =>
+        r.id === reportId ? { ...r, status: newStatus } : r
+      )
+    );
     try {
-      // Show immediate feedback toast
       toast({
         title: `${newStatus === 'approved' ? 'Approving' : 'Rejecting'} report`,
         description: "Please wait...",
       });
-      
-      const response = await fetch(`/api/admin/reports/${reportId}`, {
+      const response = await fetchWithCSRF(`/api/admin/reports/${reportId}`, {
         method: 'PUT',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           "Cache-Control": "no-cache",
           "Pragma": "no-cache"
         },
         body: JSON.stringify({ status: newStatus }),
       });
-      
       if (!response.ok) {
         throw new Error('Failed to update status');
       }
-      
       await mutate();
-      
+      setOptimisticReports(null); // Reset to SWR data
       toast({
         title: `Report ${newStatus === 'approved' ? 'Approved' : 'Rejected'}`,
         description: `Report has been ${newStatus === 'approved' ? 'approved' : 'rejected'} successfully.`,
       });
     } catch (error) {
+      setOptimisticReports(prevReports); // Rollback
       toast({
         title: 'Status Update Failed',
         description: 'Failed to update report status. Please try again.',
@@ -214,7 +210,6 @@ export function ReportsContent() {
       });
       console.error('Failed to update report status:', error);
     } finally {
-      // Remove from processing set
       setProcessingReportIds(prev => {
         const updated = new Set(prev);
         updated.delete(reportId);
@@ -454,13 +449,127 @@ export function ReportsContent() {
   }
 
   function ReportsTable({ data, onStatusUpdate, loading, page, setPage, totalPages }: ReportsTableProps) {
+    const [selectedReports, setSelectedReports] = useState<string[]>([]);
+    const [showBulkRejectDialog, setShowBulkRejectDialog] = useState(false);
+    const [bulkRejectionReason, setBulkRejectionReason] = useState("");
+    const [isBulkProcessing, setIsBulkProcessing] = useState(false);
+    const [bulkResults, setBulkResults] = useState<{ id: string, status: string, error?: string }[]>([]);
+    const selectAllRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+      if (selectAllRef.current) {
+        selectAllRef.current.indeterminate = selectedReports.length > 0 && selectedReports.length < data.length;
+      }
+    }, [selectedReports, data]);
+
+    const handleBulkApprove = async () => {
+      setIsBulkProcessing(true);
+      setBulkResults([]);
+      const prevReports = data;
+      setOptimisticReports(
+        data.map(r => selectedReports.includes(r.id) ? { ...r, status: "approved" } : r)
+      );
+      try {
+        const res = await fetch("/api/admin/reports/batch", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: selectedReports, action: "approve" }),
+        });
+        const data = await res.json();
+        setBulkResults(data.results || []);
+        if (!res.ok) throw new Error(data.error || "Bulk approve failed");
+        await mutate();
+        setOptimisticReports(null);
+        setSelectedReports([]);
+        toast({ title: "Bulk Approve Complete", description: `${data.results?.filter((r: any) => r.status === 'success').length || 0} succeeded, ${data.results?.filter((r: any) => r.status === 'error').length || 0} failed.`, variant: data.results?.some((r: any) => r.status === 'error') ? "destructive" : "default" });
+      } catch (err) {
+        setOptimisticReports(prevReports);
+        toast({ title: "Bulk Approve Failed", description: "Failed to bulk approve reports. Please try again.", variant: "destructive" });
+      } finally {
+        setIsBulkProcessing(false);
+      }
+    };
+
+    const handleBulkReject = async () => {
+      setIsBulkProcessing(true);
+      setBulkResults([]);
+      const prevReports = data;
+      setOptimisticReports(
+        data.map(r => selectedReports.includes(r.id) ? { ...r, status: "rejected" } : r)
+      );
+      try {
+        const res = await fetch("/api/admin/reports/batch", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: selectedReports, action: "reject", reason: bulkRejectionReason }),
+        });
+        const data = await res.json();
+        setBulkResults(data.results || []);
+        if (!res.ok) throw new Error(data.error || "Bulk reject failed");
+        await mutate();
+        setOptimisticReports(null);
+        setSelectedReports([]);
+        setShowBulkRejectDialog(false);
+        setBulkRejectionReason("");
+        toast({ title: "Bulk Reject Complete", description: `${data.results?.filter((r: any) => r.status === 'success').length || 0} succeeded, ${data.results?.filter((r: any) => r.status === 'error').length || 0} failed.`, variant: data.results?.some((r: any) => r.status === 'error') ? "destructive" : "default" });
+      } catch (err) {
+        setOptimisticReports(prevReports);
+        toast({ title: "Bulk Reject Failed", description: "Failed to bulk reject reports. Please try again.", variant: "destructive" });
+      } finally {
+        setIsBulkProcessing(false);
+      }
+    };
+
+    const handleBulkDelete = async () => {
+      setIsBulkProcessing(true);
+      setBulkResults([]);
+      const prevReports = data;
+      setOptimisticReports(
+        data.filter(r => !selectedReports.includes(r.id))
+      );
+      try {
+        const res = await fetch("/api/admin/reports/batch", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: selectedReports }),
+        });
+        const data = await res.json();
+        setBulkResults(data.results || []);
+        if (!res.ok) throw new Error(data.error || "Bulk delete failed");
+        await mutate();
+        setOptimisticReports(null);
+        setSelectedReports([]);
+        toast({ title: "Bulk Delete Complete", description: `${data.results?.filter((r: any) => r.status === 'success').length || 0} succeeded, ${data.results?.filter((r: any) => r.status === 'error').length || 0} failed.`, variant: data.results?.some((r: any) => r.status === 'error') ? "destructive" : "default" });
+      } catch (err) {
+        setOptimisticReports(prevReports);
+        toast({ title: "Bulk Delete Failed", description: "Failed to bulk delete reports. Please try again.", variant: "destructive" });
+      } finally {
+        setIsBulkProcessing(false);
+      }
+    };
+
     return (
-          <Card>
+      <Card>
         <CardContent className="p-0">
           <div className="h-[400px] sm:h-[600px] overflow-y-auto w-full">
             <Table>
               <TableHeader className="sticky top-0 bg-background z-10">
                 <TableRow>
+                  <TableHead>
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      aria-label="Select all reports"
+                      checked={data.length > 0 && selectedReports.length === data.length}
+                      onChange={e => {
+                        if (e.target.checked) {
+                          setSelectedReports(data.map(r => r.id));
+                        } else {
+                          setSelectedReports([]);
+                        }
+                      }}
+                    />
+                  </TableHead>
                   <TableHead>Employee</TableHead>
                   <TableHead>City</TableHead>
                   <TableHead>Type</TableHead>
@@ -473,17 +582,31 @@ export function ReportsContent() {
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center">Loading...</TableCell>
+                    <TableCell colSpan={8} className="text-center">Loading...</TableCell>
                   </TableRow>
                 ) : data.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center text-muted-foreground">
                       No reports found.
                     </TableCell>
                   </TableRow>
                 ) : (
                   data.map((report: Report) => (
                     <TableRow key={report.id}>
+                      <TableCell>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select report ${report.id}`}
+                          checked={selectedReports.includes(report.id)}
+                          onChange={e => {
+                            if (e.target.checked) {
+                              setSelectedReports([...selectedReports, report.id]);
+                            } else {
+                              setSelectedReports(selectedReports.filter(id => id !== report.id));
+                            }
+                          }}
+                        />
+                      </TableCell>
                       <TableCell>{report.employeeName}</TableCell>
                       <TableCell>{report.city}</TableCell>
                       <TableCell>{report.type}</TableCell>
@@ -551,11 +674,11 @@ export function ReportsContent() {
                 )}
               </TableBody>
             </Table>
-                    </div>
+          </div>
           {/* Showing X reports summary */}
           <div className="flex justify-end items-center px-4 py-2 text-sm text-muted-foreground">
-            Showing {totalReports} reports
-                  </div>
+            Showing {data.length} reports
+          </div>
           {/* Pagination Controls */}
           <div className="flex justify-end items-center gap-2 p-4 border-t">
             <Button size="sm" variant="outline" onClick={() => setPage(1)} disabled={page <= 1 || loading}>
@@ -571,9 +694,67 @@ export function ReportsContent() {
             <Button size="sm" variant="outline" onClick={() => setPage(totalPages)} disabled={page >= totalPages || loading}>
               Last
             </Button>
-              </div>
-            </CardContent>
-          </Card>
+          </div>
+          {/* Bulk Action Buttons */}
+          {selectedReports.length > 0 && (
+            <div className="mb-4 flex gap-2">
+              <Button
+                variant="success"
+                disabled={isBulkProcessing}
+                onClick={handleBulkApprove}
+              >
+                Approve Selected
+              </Button>
+              <Button
+                variant="warning"
+                disabled={isBulkProcessing}
+                onClick={() => setShowBulkRejectDialog(true)}
+              >
+                Reject Selected
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={isBulkProcessing}
+                onClick={handleBulkDelete}
+              >
+                Delete Selected
+              </Button>
+            </div>
+          )}
+          {/* Bulk Reject Dialog */}
+          <Dialog open={showBulkRejectDialog} onOpenChange={setShowBulkRejectDialog}>
+            <DialogContent>
+              <DialogHeader>Reject Selected Reports</DialogHeader>
+              <DialogDescription>
+                Please provide a reason for rejection. This will be sent to all selected employees.
+              </DialogDescription>
+              <Textarea
+                value={bulkRejectionReason}
+                onChange={e => setBulkRejectionReason(e.target.value)}
+                placeholder="Enter rejection reason..."
+                rows={3}
+                autoFocus
+              />
+              <DialogFooter>
+                <Button
+                  variant="secondary"
+                  onClick={() => setShowBulkRejectDialog(false)}
+                  disabled={isBulkProcessing}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="warning"
+                  onClick={handleBulkReject}
+                  disabled={isBulkProcessing || !bulkRejectionReason.trim()}
+                >
+                  Reject
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -620,7 +801,7 @@ export function ReportsContent() {
             <h3 className="text-xl font-semibold text-gray-800">
               {selectedReport.type.charAt(0).toUpperCase() + selectedReport.type.slice(1)} Report Details
             </h3>
-                </div>
+          </div>
           <dl className="grid grid-cols-2 gap-y-4 gap-x-4">
             {selectedReport.type === "time" && <>
               <dt className="text-sm text-gray-600 font-medium">Hours:</dt>
@@ -648,46 +829,37 @@ export function ReportsContent() {
           {selectedReport.notes && (
             <div className="mt-6 p-3 bg-gray-50 border border-gray-200 rounded text-gray-700 text-sm">
               <span className="font-semibold">Notes:</span> {selectedReport.notes}
-                    </div>
+            </div>
           )}
-                    </div>
-                  </div>
+        </div>
+      </div>
     ) : null
   );
 
   // --- Render ---
   return (
-    <section>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold">Reports</h2>
-        <Button
-          variant="default"
-          className={`${isDownloading ? 'bg-gray-500 cursor-not-allowed' : 'bg-black hover:bg-gray-800'} 
-                    text-white px-4 py-2 rounded shadow transition-colors duration-150`}
-          onClick={handleDownloadExcel}
-          disabled={isDownloading || reports.length === 0 || isLoading}
-        >
-          {isDownloading ? (
-            <>
-              <span className="animate-spin inline-block mr-1">⏳</span> Exporting...
-            </>
-          ) : (
-            'Export to Excel'
-          )}
-        </Button>
-              </div>
-      <FilterBar filters={filters} setFilters={setFilters} />
-      {isLoading ? <ReportsTableSkeleton /> : (
-      <ReportsTable
-        data={reports}
-        onStatusUpdate={handleStatusUpdate}
-        loading={isLoading}
-        page={page}
-        setPage={setPage}
-        totalPages={totalPages}
-      />
-      )}
-      <ReportDetailsModal />
-    </section>
+    <div className="ml-6">
+      {/* Sticky top bar */}
+      <div className="sticky top-0 z-20 bg-white flex items-center justify-between py-4 px-2 shadow-md border-b">
+        <h1 className="text-2xl font-bold">Reports</h1>
+        <button className="bg-gray-600 text-white px-4 py-2 rounded shadow hover:bg-gray-700 transition" onClick={handleDownloadExcel}>
+          Export to Excel
+        </button>
+      </div>
+      <section>
+        <FilterBar filters={filters} setFilters={setFilters} />
+        {isLoading ? <ReportsTableSkeleton /> : (
+          <ReportsTable
+            data={reports}
+            onStatusUpdate={handleStatusUpdate}
+            loading={isLoading}
+            page={page}
+            setPage={setPage}
+            totalPages={totalPages}
+          />
+        )}
+        <ReportDetailsModal />
+      </section>
+    </div>
   );
 }

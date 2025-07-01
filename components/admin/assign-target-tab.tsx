@@ -34,6 +34,8 @@ import { useToast } from "@/components/ui/use-toast";
 import { LoadingButton } from "@/components/ui/loading-button";
 import BulkAssignTargetModal from "./bulk-assign-target-modal";
 import AssignTargetModal from "./assign-target-modal";
+import { adminFetcher, fetchWithCSRF } from "@/lib/admin-api-client";
+import debounce from "lodash.debounce";
 
 const months = [
   "January", "February", "March", "April", "May", "June",
@@ -81,9 +83,8 @@ export default function AssignTargetTab() {
   const targetsKey = `/api/admin/sales-target?month=${selectedMonth + 1}&year=${selectedYear}`;
   const salesKey = employees.length > 0 ? `/api/sales?groupBy=employee&month=${selectedMonth + 1}&year=${selectedYear}` : null;
 
-  const fetcher = (url: string) => fetch(url).then(res => res.json());
-  const { data: targetsData, isLoading: targetsLoading, mutate: mutateTargets } = useSWR(targetsKey, fetcher);
-  const { data: salesTotalsData, isLoading: salesTotalsLoading } = useSWR(salesKey, fetcher);
+  const { data: targetsData, isLoading: targetsLoading, mutate: mutateTargets } = useSWR(targetsKey, adminFetcher);
+  const { data: salesTotalsData, isLoading: salesTotalsLoading } = useSWR(salesKey, adminFetcher);
 
   if (typeof window !== 'undefined') {
     console.log('EMPLOYEES', employees.map(e => ({ id: e.id, name: e.user?.name })));
@@ -115,10 +116,12 @@ export default function AssignTargetTab() {
   const handleSingleAssign = async (id: number, value: string) => {
     if (!value) return;
     setSavingId(id);
+    const prevTargets = targetsData?.targets || [];
+    const optimisticTargets = prevTargets.map(t => t.employeeId === id ? { ...t, targetAmount: Number(value) } : t);
+    mutateTargets({ ...targetsData, targets: optimisticTargets }, false);
     try {
-      await fetch("/api/admin/sales-target", {
+      await fetchWithCSRF("/api/admin/sales-target", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           employeeId: id,
           month: selectedMonth + 1,
@@ -127,12 +130,13 @@ export default function AssignTargetTab() {
         }),
       });
       await Promise.all([
-        mutate(targetsKey, undefined, { revalidate: true }),
+        mutateTargets(),
         mutate(salesKey, undefined, { revalidate: true }),
       ]);
       setEditTarget(t => { const copy = { ...t }; delete copy[id]; return copy; });
       toast({ title: "Success", description: "Target assigned/updated." });
     } catch (err: any) {
+      mutateTargets({ ...targetsData, targets: prevTargets }, false);
       toast({ title: "Error", description: err.message || "Failed to assign/update target.", variant: "destructive" });
     } finally {
       setSavingId(null);
@@ -140,43 +144,55 @@ export default function AssignTargetTab() {
   };
   const handleSingleDelete = async (id: number) => {
     setDeletingId(id);
+    const prevTargets = targetsData?.targets || [];
+    const optimisticTargets = prevTargets.filter(t => t.employeeId !== id);
+    mutateTargets({ ...targetsData, targets: optimisticTargets }, false);
     try {
       const params = new URLSearchParams({
         employeeId: String(id),
         month: String(selectedMonth + 1),
         year: String(selectedYear),
       });
-      const res = await fetch(`/api/admin/sales-target?${params.toString()}`, {
-        method: "DELETE",
-      });
+      const res = await fetchWithCSRF(`/api/admin/sales-target?${params.toString()}`, { method: "DELETE" });
       const data = await res.json();
       await Promise.all([
-        mutate(targetsKey, undefined, { revalidate: true }),
+        mutateTargets(),
         mutate(salesKey, undefined, { revalidate: true }),
       ]);
       setEditTarget(t => { const copy = { ...t }; delete copy[id]; return copy; });
       if (data.success) {
         toast({ title: "Success", description: "Target deleted." });
       } else {
+        mutateTargets({ ...targetsData, targets: prevTargets }, false);
         toast({ title: "Error", description: "Target not found or already deleted.", variant: "destructive" });
       }
     } catch (err: any) {
+      mutateTargets({ ...targetsData, targets: prevTargets }, false);
       toast({ title: "Error", description: err.message || "Failed to delete target.", variant: "destructive" });
-    } finally {
-      setDeletingId(null);
     }
+    setDeletingId(null);
   };
 
   const handleBulkAssign = async () => {
     if (!bulkTarget || selectedIds.length === 0) return;
     setBulkSaving(true);
     setBulkError(null);
+    const prevTargets = targetsData?.targets || [];
+    const optimisticTargets = [
+      ...selectedIds.map(id => ({
+        employeeId: id,
+        targetAmount: Number(bulkTarget),
+        month: selectedMonth + 1,
+        year: selectedYear,
+      })),
+      ...prevTargets.filter(t => !selectedIds.includes(t.employeeId)),
+    ];
+    mutateTargets({ ...targetsData, targets: optimisticTargets }, false);
     try {
       await Promise.all(
         selectedIds.map(id =>
-          fetch("/api/admin/sales-target", {
+          fetchWithCSRF("/api/admin/sales-target", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               employeeId: id,
               month: selectedMonth + 1,
@@ -187,13 +203,14 @@ export default function AssignTargetTab() {
         )
       );
       await Promise.all([
-        mutate(targetsKey, undefined, { revalidate: true }),
+        mutateTargets(),
         mutate(salesKey, undefined, { revalidate: true }),
       ]);
       setBulkTarget("");
       setSelectedIds([]);
       toast({ title: "Success", description: "Bulk target assignment complete." });
     } catch (err: any) {
+      mutateTargets({ ...targetsData, targets: prevTargets }, false);
       setBulkError(err.message || "Failed to assign targets");
       toast({ title: "Error", description: err.message || "Failed to assign targets.", variant: "destructive" });
     }
@@ -203,12 +220,14 @@ export default function AssignTargetTab() {
     if (selectedIds.length === 0) return;
     setBulkDeleteLoading(true);
     setBulkError(null);
+    const prevTargets = targetsData?.targets || [];
+    const optimisticTargets = prevTargets.filter(t => !selectedIds.includes(t.employeeId));
+    mutateTargets({ ...targetsData, targets: optimisticTargets }, false);
     try {
       await Promise.all(
         selectedIds.map(id =>
-          fetch("/api/admin/sales-target", {
+          fetchWithCSRF("/api/admin/sales-target", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               employeeId: id,
               month: selectedMonth + 1,
@@ -219,12 +238,13 @@ export default function AssignTargetTab() {
         )
       );
       await Promise.all([
-        mutate(targetsKey, undefined, { revalidate: true }),
+        mutateTargets(),
         mutate(salesKey, undefined, { revalidate: true }),
       ]);
       setSelectedIds([]);
       toast({ title: "Success", description: "Bulk target deletion complete." });
     } catch (err: any) {
+      mutateTargets({ ...targetsData, targets: prevTargets }, false);
       setBulkError(err.message || "Failed to delete targets");
       toast({ title: "Error", description: err.message || "Failed to delete targets.", variant: "destructive" });
     }

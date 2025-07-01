@@ -47,7 +47,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ message: `Updated ${salaries.length} records` });
   } catch (error) {
-    console.error("Error backfilling salary records:", error);
     return NextResponse.json({ error: "Failed to backfill records" }, { status: 500 });
   }
 } 

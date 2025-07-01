@@ -35,4 +35,4 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   });
 
   return NextResponse.json({ success: true });
-} 
+}

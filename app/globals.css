@@ -200,3 +200,12 @@ select:focus, select:focus-visible {
   -webkit-appearance: none !important;
   accent-color: #60a5fa !important;
 }
+
+.filter-select:focus, .filter-select:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 2px #e5e7eb, 0 2px 8px 0 rgba(229,231,235,0.08) !important; /* gray-200 */
+  border-color: #d1d5db !important; /* gray-300/400 */
+  background: #fff;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+}

@@ -31,4 +31,4 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
 
   await prisma.notification.delete({ where: { id: notificationId } });
   return NextResponse.json({ success: true });
-} 
+}

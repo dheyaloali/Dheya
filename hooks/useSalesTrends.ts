@@ -1,4 +1,5 @@
 import useSWR from 'swr';
+import { adminFetcher } from '@/lib/admin-api-client';
 
 export interface SalesTrendsFilters {
   year?: number;
@@ -18,10 +19,7 @@ function buildTrendsQuery(filters: SalesTrendsFilters) {
 
 export function useSalesTrends(filters: SalesTrendsFilters) {
   const url = buildTrendsQuery(filters);
-  const { data, error, isLoading, mutate } = useSWR(url, (url) => fetch(url).then(res => {
-    if (!res.ok) throw new Error('Failed to fetch sales trends');
-    return res.json();
-  }));
+  const { data, error, isLoading, mutate } = useSWR(url, adminFetcher);
   return {
     data: data || [],
     isLoading,

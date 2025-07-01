@@ -18,6 +18,33 @@ export function useEmployeeSocket() {
   const reconnectAttemptsRef = useRef(0);
   const MAX_RECONNECT_ATTEMPTS = 5;
 
+  // Get user's language preference from cookies
+  const getUserLanguage = () => {
+    return Cookies.get('locale') || 'en';
+  };
+
+  // Function to translate notification message
+  const translateNotification = async (message: string, type: string) => {
+    const language = getUserLanguage();
+    if (language === 'en') return message; // No need to translate if English
+    
+    try {
+      // Fetch translations for the current language
+      const translations = await import(`@/app/messages/${language}.json`).then(mod => mod.default);
+      
+      // Check if there's a direct translation for this notification message
+      if (translations.Notifications && translations.Notifications[message]) {
+        return translations.Notifications[message];
+      }
+      
+      // If no direct translation, keep the original message
+      return message;
+    } catch (error) {
+      console.error("[EmployeeSocket] Error translating notification:", error);
+      return message; // Fallback to original message
+    }
+  };
+
   useEffect(() => {
     // Show explicit toast if real-time is disabled by settings
     if (
@@ -161,17 +188,31 @@ export function useEmployeeSocket() {
       });
 
       // Add notification event listener
-      socket.on("notification", (data) => {
+      socket.on("notification", async (data) => {
         console.log("[EmployeeSocket] Received notification:", data);
         
-        // Show toast notification
-        toast({
-          title: data.type.startsWith("admin_") ? "Admin Action" :
-                data.type.startsWith("employee_") ? "Employee Action" :
-                "Notification",
-          description: data.message,
-          variant: "default",
-        });
+        // Translate notification message for employees
+        if (!session?.user?.isAdmin) {
+          const translatedMessage = await translateNotification(data.message, data.type);
+          
+          // Show toast notification with translated message
+          toast({
+            title: data.type.startsWith("admin_") ? "Admin Action" :
+                  data.type.startsWith("employee_") ? "Employee Action" :
+                  "Notification",
+            description: translatedMessage,
+            variant: "default",
+          });
+        } else {
+          // For admins, show original message
+          toast({
+            title: data.type.startsWith("admin_") ? "Admin Action" :
+                  data.type.startsWith("employee_") ? "Employee Action" :
+                  "Notification",
+            description: data.message,
+            variant: "default",
+          });
+        }
       });
 
       return () => {

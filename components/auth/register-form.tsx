@@ -77,26 +77,11 @@ function getFormSchema(t: (key: string) => string) {
   })
 }
 
-// Add a simple modal component
-function SuccessModal({ onClose }: { onClose: () => void }) {
-  const t = useTranslations('Auth')
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
-      <div className="bg-white rounded-lg shadow-lg p-8 max-w-sm w-full text-center">
-        <h2 className="text-xl font-semibold mb-2">{t('registrationSuccessTitle')}</h2>
-        <p className="mb-4">{t('registrationSuccessDesc')}</p>
-        <Button onClick={onClose} className="w-full">{t('goToLogin')}</Button>
-      </div>
-    </div>
-  )
-}
-
 export function RegisterForm() {
   const router = useRouter()
   const { toast } = useToast()
   const [isLoading, setIsLoading] = useState(false)
   const [registerError, setRegisterError] = useState("")
-  const [showSuccessModal, setShowSuccessModal] = useState(false)
   const [passwordValue, setPasswordValue] = useState("")
   const [picturePreview, setPicturePreview] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -180,6 +165,16 @@ export function RegisterForm() {
   const handleUniqueCheck = (field: "name" | "email", value: string) => {
     // Trim value before checking uniqueness
     const trimmedValue = value.trim();
+    
+    // Skip check if value is empty
+    if (!trimmedValue) {
+      setUniqueStatus(prev => ({ 
+        ...prev, 
+        [field]: { loading: false, available: true, message: "" } 
+      }));
+      return;
+    }
+    
     setUniqueStatus(prev => ({ ...prev, [field]: { ...prev[field], loading: true } }));
     checkUnique(field, trimmedValue);
   };
@@ -225,13 +220,19 @@ export function RegisterForm() {
           setIsSubmitting(false)
         return
       }
-      // Show modal instead of toast
-      setShowSuccessModal(true)
+      
+      // Redirect to verification pending page instead of showing modal
       form.reset()
       setPicturePreview(null)
-      setTimeout(() => {
-        router.push("/login")
-      }, 4000)
+      
+      // Show brief toast notification
+      toast({
+        title: t('registrationSuccessTitle'),
+        description: t('registrationSuccessDesc'),
+      });
+      
+      // Redirect to verification pending page
+      router.push("/verify-email/pending")
     } catch (error) {
       setRegisterError(t('unexpectedError'))
       toast({
@@ -262,7 +263,6 @@ export function RegisterForm() {
 
   return (
     <>
-      {showSuccessModal && <SuccessModal onClose={() => router.push("/login")} />}
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
         {/* Name + Email + Phone row */}

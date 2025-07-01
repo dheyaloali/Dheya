@@ -1,4 +1,3 @@
-export const runtime = 'nodejs';
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -109,4 +108,4 @@ const employeeName = employee?.user?.name || "Unknown";
     console.error('Error in salary breakdown:', error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
-} 
+}

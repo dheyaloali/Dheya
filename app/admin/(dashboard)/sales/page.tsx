@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { BarChart3, CalendarDays, Table, ChevronLeft, ChevronRight } from "lucide-react";
 import clsx from "clsx";
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
@@ -18,6 +18,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { useSalesRecords } from "@/hooks/useSalesRecords";
 import { useSalesTrends } from "@/hooks/useSalesTrends";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useCurrency } from "@/components/providers/currency-provider";
 
 const sections = [
   { key: "by-product", label: "Sales Trends", icon: <BarChart3 className="w-6 h-6" /> },
@@ -52,6 +53,7 @@ export default function AdminSalesPage() {
   const [recordsSelectedCities, setRecordsSelectedCities] = useState<string[]>([]);
 
   const { toast } = useToast();
+  const { formatAmount } = useCurrency();
 
   // Helper to format date
   function formatDate(dateStr: string) {
@@ -98,11 +100,13 @@ export default function AdminSalesPage() {
   const productIdsToShow = trendsSelectedProducts.length > 0
     ? trendsSelectedProducts
     : products.map(p => String(p.id));
-  let chartData: any[] = [];
-  if (Array.isArray(trendsData)) {
+
+  // Memoized chart data
+  const memoizedChartData = useMemo(() => {
+    if (!Array.isArray(trendsData)) return [];
     if (view === 'yearly') {
       const years = Array.from(new Set(trendsData.map((row: any) => row.year))).sort();
-      chartData = years.map((y: number) => {
+      return years.map((y: number) => {
         const entry: any = { year: y };
         productIdsToShow.forEach(pid => {
           const prodName = productIdToName[pid] || `Product ${pid}`;
@@ -113,7 +117,7 @@ export default function AdminSalesPage() {
         return entry;
       });
     } else {
-      chartData = Array.from({ length: 12 }, (_, i) => {
+      const chartData = Array.from({ length: 12 }, (_, i) => {
         const month = i + 1;
         const entry: any = { month };
         productIdsToShow.forEach(pid => {
@@ -129,8 +133,9 @@ export default function AdminSalesPage() {
           chartData[monthIdx][prodName] = row.totalSales ?? row.amount ?? row.sales ?? 0;
         }
       });
+      return chartData;
     }
-  }
+  }, [trendsData, view, productIdsToShow, productIdToName]);
 
   // Excel download handlers
   const handleDownloadExcel = (data: any[], filename: string) => {
@@ -152,6 +157,18 @@ export default function AdminSalesPage() {
 
   // For the Status filter in the All Sales Records section:
   const allStatuses = Array.from(new Set(employees.map(e => e.user?.status))).filter(Boolean);
+
+  // Memoized sorted and filtered sales
+  const sortedAndFilteredSales = useMemo(() => {
+    return (pagedSalesArchive || [])
+      .map((sale: any) => ({ ...sale, _date: new Date(sale.date || sale.createdAt || sale.updatedAt || 0) }))
+      .sort((a: any, b: any) => b._date.getTime() - a._date.getTime())
+      .filter((sale: any) => {
+        if (filterStatus === 'all') return true;
+        const emp = employees.find((e: any) => String(e.id) === String(sale.employeeId));
+        return emp?.user?.status === filterStatus;
+      });
+  }, [pagedSalesArchive, filterStatus, employees]);
 
   useEffect(() => {
     setMounted(true);
@@ -197,7 +214,7 @@ export default function AdminSalesPage() {
       return d.toLocaleDateString();
     }
     if (col.toLowerCase().includes('amount') || col.toLowerCase().includes('price') || col.toLowerCase().includes('total')) {
-      return value != null ? `$${Number(value).toLocaleString()}` : '-';
+      return value != null ? formatAmount(Number(value)) : '-';
     }
     return value ?? '-';
   }
@@ -238,28 +255,42 @@ export default function AdminSalesPage() {
     </div>
   );
 
-  // Before rendering the table, sort and filter sales by status:
-  const sortedAndFilteredSales = (pagedSalesArchive || [])
-    .map(sale => ({ ...sale, _date: new Date(sale.date || sale.createdAt || sale.updatedAt || 0) }))
-    .sort((a, b) => b._date.getTime() - a._date.getTime())
-    .filter(sale => {
-      if (filterStatus === 'all') return true;
-      const emp = employees.find(e => String(e.id) === String(sale.employeeId));
-      return emp?.user?.status === filterStatus;
-    });
+  // Empty state component
+  const EmptyState = ({ message, subMessage }: { message: string; subMessage?: string }) => (
+    <div className="flex flex-col items-center justify-center p-8 text-center bg-white rounded-lg border shadow-sm min-h-[300px]">
+      <div className="text-gray-400 mb-2">
+        <BarChart3 className="w-12 h-12 mx-auto" />
+      </div>
+      <h3 className="text-lg font-semibold text-gray-700 mb-1">{message}</h3>
+      {subMessage && <p className="text-sm text-gray-500">{subMessage}</p>}
+    </div>
+  );
+
+  // Memoized event handlers
+  const handleSectionChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => setSection(e.target.value), []);
+  const handleYearChange = useCallback((v: string) => setYear(Number(v)), []);
+  const handleViewChange = useCallback((v: string) => setView(v as 'monthly' | 'yearly'), []);
+  const handleDownload = useCallback(() => handleDownloadExcel(pagedSalesArchive, "sales.xlsx"), [pagedSalesArchive]);
+  const handleFromDateChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => setFilterFromDate(e.target.value), []);
+  const handleToDateChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => setFilterToDate(e.target.value), []);
+  const handleStatusChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => setFilterStatus(e.target.value), []);
 
   if (!mounted) return null;
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8 transition-all duration-300 w-full">
-      {/* Sales View Switcher Filter */}
-      <div className="mb-8 flex items-center gap-4">
+    <div className="min-h-screen bg-white p-8 pt-0 transition-all duration-300 w-full">
+      {/* Sticky Sales View Filter Bar */}
+      <div
+        className="sticky top-0 z-20 bg-white rounded-r-2xl shadow-md flex items-center gap-4 px-6 py-4 mb-4 mt-0"
+        style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, marginTop: 0 }}
+      >
         <span className="text-lg font-semibold text-black">Sales View:</span>
         <div className="relative">
           <select
+            aria-label="Sales View Selector"
             className="border border-blue-300 rounded-lg px-4 py-2 text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-200 transition-all bg-white text-black font-medium hover:border-blue-400"
             value={section}
-            onChange={e => setSection(e.target.value)}
+            onChange={handleSectionChange}
           >
             {sections.map(s => (
               <option key={s.key} value={s.key} className="text-black">{s.label}</option>
@@ -272,11 +303,11 @@ export default function AdminSalesPage() {
         <div className="mb-6 flex flex-wrap gap-4 items-end">
           <div>
             <label className="block text-xs font-medium mb-1">From</label>
-            <input type="date" className="border rounded px-2 py-1" value={filterFromDate} onChange={e => setFilterFromDate(e.target.value)} />
+            <input type="date" className="border rounded px-2 py-1" value={filterFromDate} onChange={handleFromDateChange} />
           </div>
           <div>
             <label className="block text-xs font-medium mb-1">To</label>
-            <input type="date" className="border rounded px-2 py-1" value={filterToDate} onChange={e => setFilterToDate(e.target.value)} />
+            <input type="date" className="border rounded px-2 py-1" value={filterToDate} onChange={handleToDateChange} />
           </div>
           <div>
             <label className="block text-xs font-medium mb-1">Product</label>
@@ -295,7 +326,7 @@ export default function AdminSalesPage() {
                   <DropdownMenuCheckboxItem
                     key={p.id}
                     checked={recordsSelectedProducts.includes(String(p.id))}
-                    onCheckedChange={checked => {
+                    onCheckedChange={(checked: boolean) => {
                       if (checked) setRecordsSelectedProducts(prev => [...prev, String(p.id)]);
                       else setRecordsSelectedProducts(prev => prev.filter(id => id !== String(p.id)));
                     }}
@@ -323,7 +354,7 @@ export default function AdminSalesPage() {
                   <DropdownMenuCheckboxItem
                     key={e.id}
                     checked={recordsSelectedEmployees.includes(String(e.id))}
-                    onCheckedChange={checked => {
+                    onCheckedChange={(checked: boolean) => {
                       if (checked) setRecordsSelectedEmployees(prev => [...prev, String(e.id)]);
                       else setRecordsSelectedEmployees(prev => prev.filter(id => id !== String(e.id)));
                     }}
@@ -336,7 +367,7 @@ export default function AdminSalesPage() {
           </div>
           <div>
             <label className="block text-xs font-medium mb-1">Status</label>
-            <select className="border rounded px-2 py-1" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+            <select className="border rounded px-2 py-1" value={filterStatus} onChange={handleStatusChange}>
               <option value="all">All</option>
               {allStatuses.map(status => (
                 <option key={status} value={status}>{status}</option>
@@ -360,7 +391,7 @@ export default function AdminSalesPage() {
                   <DropdownMenuCheckboxItem
                     key={c}
                     checked={recordsSelectedCities.includes(c)}
-                    onCheckedChange={checked => {
+                    onCheckedChange={(checked: boolean) => {
                       if (checked) setRecordsSelectedCities(prev => [...prev, c]);
                       else setRecordsSelectedCities(prev => prev.filter(city => city !== c));
                     }}
@@ -372,7 +403,7 @@ export default function AdminSalesPage() {
             </DropdownMenu>
           </div>
           <div className="flex flex-col gap-2 ml-4">
-            <button className="bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700" onClick={() => handleDownloadExcel(pagedSalesArchive, "sales.xlsx")}>Download</button>
+            <button aria-label="Download sales records as Excel" className="bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700" onClick={handleDownload}>Download</button>
           </div>
         </div>
       )}
@@ -384,7 +415,7 @@ export default function AdminSalesPage() {
         <div className="flex flex-wrap gap-4 mb-6 items-end">
           <div>
                   <label className="block text-xs font-medium mb-1">View</label>
-                  <Select value={view} onValueChange={(v) => setView(v as 'monthly' | 'yearly')}>
+                  <Select value={view} onValueChange={handleViewChange}>
                     <SelectTrigger className="w-32">
                       <SelectValue placeholder="View" />
                     </SelectTrigger>
@@ -397,7 +428,7 @@ export default function AdminSalesPage() {
                 {view === 'monthly' && (
                 <div>
                   <label className="block text-xs font-medium mb-1">Year</label>
-                  <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
+                  <Select value={String(year)} onValueChange={handleYearChange}>
                     <SelectTrigger className="w-32">
                       <SelectValue placeholder="Year" />
                     </SelectTrigger>
@@ -426,7 +457,7 @@ export default function AdminSalesPage() {
                     <DropdownMenuCheckboxItem
                       key={p.id}
                       checked={trendsSelectedProducts.includes(String(p.id))}
-                      onCheckedChange={checked => {
+                      onCheckedChange={(checked: boolean) => {
                         if (checked) setTrendsSelectedProducts(prev => [...prev, String(p.id)]);
                         else setTrendsSelectedProducts(prev => prev.filter(id => id !== String(p.id)));
                       }}
@@ -454,7 +485,7 @@ export default function AdminSalesPage() {
                     <DropdownMenuCheckboxItem
                       key={e.id}
                       checked={trendsSelectedEmployees.includes(String(e.id))}
-                      onCheckedChange={checked => {
+                      onCheckedChange={(checked: boolean) => {
                         if (checked) setTrendsSelectedEmployees(prev => [...prev, String(e.id)]);
                         else setTrendsSelectedEmployees(prev => prev.filter(id => id !== String(e.id)));
                       }}
@@ -468,18 +499,29 @@ export default function AdminSalesPage() {
         </div>
               {/* Chart Section */}
               {isTrendsLoading ? (
-                <div className="py-12 text-center text-gray-400">Loading chart...</div>
+                <div className="flex items-center justify-center min-h-[300px]">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                </div>
               ) : trendsError ? (
-                <div className="py-12 text-center text-red-500">Failed to load chart data.</div>
+                <EmptyState 
+                  message="Error loading sales trends" 
+                  subMessage="Please try again later or contact support if the problem persists."
+                />
+              ) : !memoizedChartData || memoizedChartData.length === 0 ? (
+                <EmptyState 
+                  message="No sales data available" 
+                  subMessage={`No sales records found for the selected year and filters.\nTry adjusting your filters or add new sales records to see trends here.`}
+                />
               ) : (
-              <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={chartData} margin={{ left: 60, right: 20, top: 20, bottom: 20 }}>
+                <div className="h-[400px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={memoizedChartData} margin={{ left: 60, right: 20, top: 20, bottom: 20 }}>
               <XAxis
                 dataKey={view === 'monthly' ? 'month' : 'year'}
                 tickFormatter={view === 'monthly' ? (v, _i) => formatMonth(v) : (v, _i) => String(v)}
               />
                   <YAxis />
-                  <Tooltip formatter={(value: number) => `$${value.toLocaleString()}`} />
+                  <Tooltip formatter={(value: number) => formatAmount(value)} />
               {(trendsSelectedProducts.length > 0 ? trendsSelectedProducts : products.map(p => String(p.id))).map((productId) => {
                 const product = products.find(p => String(p.id) === productId);
                 if (!product) return null;
@@ -489,25 +531,45 @@ export default function AdminSalesPage() {
               })}
                 </BarChart>
               </ResponsiveContainer>
+                </div>
               )}
           </div>
         )}
         {section === "all" && (
-          <div className="bg-white rounded shadow p-6 min-h-[400px] max-w-5xl mx-auto">
-            <div className="w-full overflow-x-auto">
-              {/* Dynamically detect columns from backend data */}
+          <div className="bg-white rounded shadow p-6">
               {isSalesLoading ? (
                 <SalesTableSkeleton />
-              ) : sortedAndFilteredSales.length > 0 ? (
-                  <table className="min-w-[1000px] text-sm border rounded">
+            ) : salesError ? (
+              <EmptyState 
+                message="Error loading sales records" 
+                subMessage="Please try again later or contact support if the problem persists."
+              />
+            ) : !pagedSalesArchive || pagedSalesArchive.length === 0 ? (
+              <EmptyState 
+                message="No sales records found" 
+                subMessage={`
+                  ${filterFromDate || filterToDate ? 'No sales found for the selected date range.' : ''}
+                  ${recordsSelectedProducts.length > 0 ? 'No sales found for the selected products.' : ''}
+                  ${recordsSelectedEmployees.length > 0 ? 'No sales found for the selected employees.' : ''}
+                  ${recordsSelectedCities.length > 0 ? 'No sales found for the selected cities.' : ''}
+                  ${filterStatus !== 'all' ? 'No sales found for the selected status.' : ''}
+                  ${!filterFromDate && !filterToDate && recordsSelectedProducts.length === 0 && 
+                    recordsSelectedEmployees.length === 0 && recordsSelectedCities.length === 0 && 
+                    filterStatus === 'all' ? 'No sales records available in the system.' : ''}
+                `.trim()}
+              />
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full" role="table">
                     <thead>
-                      <tr className="bg-gray-100">
+                      <tr>
                       {Object.keys(pagedSalesArchive[0])
                           .filter(col => !['id', 'employeeid', 'productid'].includes(col.toLowerCase()))
                           .map((col) => (
-                            <th key={col} className="p-2">{col.charAt(0).toUpperCase() + col.slice(1)}</th>
+                            <th scope="col" key={col} className="p-2">{col.charAt(0).toUpperCase() + col.slice(1)}</th>
                           ))}
-                        <th className="p-2">Status</th>
+                        <th scope="col" className="p-2">Status</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -528,13 +590,7 @@ export default function AdminSalesPage() {
                       ))}
                     </tbody>
                   </table>
-                ) : (
-                <div className="min-w-max min-h-[240px] flex flex-col items-center justify-center border rounded bg-white">
-                  <div className="text-4xl text-gray-300 mb-2">🗂️</div>
-                  <div className="text-lg font-semibold text-gray-500 mb-1">No sales found</div>
-                  <div className="text-sm text-gray-400">Try adjusting your filters or date range.</div>
-                </div>
-                )}
+
             </div>
             {/* Pagination */}
             <div className="flex flex-col md:flex-row justify-between items-center mt-4 gap-2">
@@ -574,6 +630,8 @@ export default function AdminSalesPage() {
                 >Last</button>
               </div>
             </div>
+              </>
+            )}
           </div>
         )}
     </div>

@@ -77,31 +77,28 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Employee not found' }, { status: 404 });
     }
     
-    // Build time filter
-    let timeFilter: any = {};
-    if (startDateObj) {
-      timeFilter.gte = startDateObj;
-    }
-    if (endDateObj) {
-      timeFilter.lte = endDateObj;
-    }
+    // Optimize query to use composite index (employeeId, timestamp)
+    const whereClause = {
+      employeeId: employeeIdNumber,
+      timestamp: {
+        gte: startDateObj,
+        lte: endDateObj
+      }
+    };
     
-    // Get total count for pagination
+    // Get total count for pagination - using the same where clause for consistency
     const total = await prisma.employeeLocation.count({
-      where: {
-        employeeId: employeeIdNumber,
-        ...(Object.keys(timeFilter).length > 0 ? { timestamp: timeFilter } : {}),
-      },
+      where: whereClause
     });
 
-    // Paginated query
+    // Paginated query - optimized to use the composite index
     const locations = await prisma.employeeLocation.findMany({
-      where: {
-        employeeId: employeeIdNumber,
-        ...(Object.keys(timeFilter).length > 0 ? { timestamp: timeFilter } : {}),
-      },
+      where: whereClause,
       orderBy: {
-        timestamp: orderBy as 'asc' | 'desc',
+        // Order by the indexed fields to leverage the index for sorting
+        ...(orderBy === 'asc' 
+          ? { timestamp: 'asc' } 
+          : { timestamp: 'desc' })
       },
       skip: (page - 1) * pageSize,
       take: pageSize,
@@ -129,12 +126,7 @@ export async function GET(request: Request) {
     );
   } catch (error) {
     console.error('Error fetching location history:', error);
-    return NextResponse.json(
-      { 
-        error: 'Failed to fetch location history',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      }, 
-      { status: 500 }
-    );
+    // Handle error
+    return NextResponse.json({ error: 'Failed to fetch location history' }, { status: 500 });
   }
 }

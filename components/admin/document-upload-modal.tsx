@@ -13,6 +13,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import useSWR from "swr"
 import { useToast } from "@/components/ui/use-toast"
 import { Info, User, FileText, Type, UploadCloud } from "lucide-react"
+import { adminFetcher, fetchWithCSRF } from "@/lib/admin-api-client"
 
 interface DocumentUploadModalProps {
   isOpen: boolean
@@ -34,7 +35,7 @@ export default function DocumentUploadModal({ isOpen, onClose, onUpload }: Docum
   const { toast, dismiss } = useToast();
 
   // Fetch employees when modal is open
-  const { data: employeeData } = useSWR(isOpen ? "/api/admin/employees?page=1&pageSize=1000" : null, url => fetch(url).then(res => res.json()));
+  const { data: employeeData } = useSWR(isOpen ? "/api/admin/employees?page=1&pageSize=1000" : null, adminFetcher);
   const employees = employeeData?.employees || [];
 
   // When employeeId changes, set employeeName
@@ -104,13 +105,21 @@ export default function DocumentUploadModal({ isOpen, onClose, onUpload }: Docum
       if (uploadedDuring) formData.append('uploadedDuring', uploadedDuring);
       if (file) formData.append('file', file);
 
+      // Get CSRF token
+      const csrfToken = document.cookie
+        .split('; ')
+        .find(row => row.startsWith('csrf-token='))
+        ?.split('=')[1];
+
       const res = await fetch('/api/admin/documents', {
         method: 'POST',
         body: formData,
         headers: {
           'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
-        }
+          'Pragma': 'no-cache',
+          'x-csrf-token': csrfToken || '',
+        },
+        credentials: 'include',
       });
       
       // Dismiss the uploading toast

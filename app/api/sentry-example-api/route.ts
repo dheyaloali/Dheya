@@ -1,14 +1,16 @@
-import { NextResponse } from "next/server";
-
 export const dynamic = "force-dynamic";
-class SentryExampleAPIError extends Error {
-  constructor(message: string | undefined) {
-    super(message);
-    this.name = "SentryExampleAPIError";
-  }
-}
 // A faulty API route to test Sentry's error monitoring
-export function GET() {
-  throw new SentryExampleAPIError("This error is raised on the backend called by the example page.");
-  return NextResponse.json({ data: "Testing Sentry Error..." });
+export async function GET() {
+  // This is a placeholder API route with Sentry disabled
+  return new Response(
+    JSON.stringify({
+      message: "Sentry example API is disabled for Capacitor compatibility",
+    }),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    }
+  );
 }

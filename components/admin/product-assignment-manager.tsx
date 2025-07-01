@@ -48,8 +48,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import useSWR from "swr";
 import AssignProductsModal from "./assign-products-modal";
-// Define a local fetcher for SWR
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+import { adminFetcher } from "@/lib/admin-api-client";
+import debounce from "lodash.debounce";
+import { getAvatarImage, getAvatarInitials } from "@/lib/avatar-utils"
+import { useCurrency } from "@/components/providers/currency-provider";
 
 // Helper function to format date
 function formatDate(dateString: string) {
@@ -88,11 +90,12 @@ export function ProductAssignmentManager() {
   const [isAssigningBulk, setIsAssigningBulk] = useState(false);
   const [assignErrorSingle, setAssignErrorSingle] = useState<string | null>(null);
   const [assignErrorBulk, setAssignErrorBulk] = useState<string | null>(null);
-  const { data: productsData, error: productsError, isLoading: productsLoading, mutate: mutateProducts } = useSWR("/api/products", fetcher);
-  const { data: employeesData, error: employeesError, isLoading: employeesLoading } = useSWR("/api/employees", fetcher);
+  const { data: productsData, error: productsError, isLoading: productsLoading, mutate: mutateProducts } = useSWR("/api/products", adminFetcher);
+  const { data: employeesData, error: employeesError, isLoading: employeesLoading } = useSWR("/api/employees", adminFetcher);
   const [isAssigningProducts, setIsAssigningProducts] = useState(false);
   const [isRemovingAssignment, setIsRemovingAssignment] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { formatAmount } = useCurrency();
 
   const selectAllEmployeesRef = useRef<HTMLInputElement>(null);
   const selectAllProductsRef = useRef<HTMLInputElement>(null);
@@ -180,61 +183,79 @@ export function ProductAssignmentManager() {
     setAssignmentModalOpen(true);
   };
 
-  // Handle creating a new assignment
+  // Debounced mutate for WebSocket events (if needed in future)
+  // const debouncedMutateAssignments = debounce(() => mutateAssignments(), 300, { leading: true, trailing: true });
+
+  // Optimistic Create Assignment
   const handleCreateAssignment = async () => {
     if (!selectedEmployee || Object.keys(selectedProducts).length === 0) {
-      toast({
-        title: "Error",
-        description: "Please select at least one product.",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: "Please select at least one product.", variant: "destructive" });
       return;
     }
     let allSuccess = true;
-    for (const productId of Object.keys(selectedProducts)) {
-      const quantity = selectedProducts[productId];
-    const result = await createAssignment({
+    const prevAssignments = assignments;
+    // Optimistically add assignments
+    const optimisticAssignments = [
+      ...Object.keys(selectedProducts).map(productId => ({
+        id: Date.now() + Math.random(),
       employeeId: selectedEmployee,
         productId: parseInt(productId),
-      quantity,
-    });
+        quantity: selectedProducts[productId],
+        assignedAt: new Date().toISOString(),
+        status: "assigned"
+      })),
+      ...assignments
+    ];
+    mutateAssignments({ assignments: optimisticAssignments, total: totalAssignments + Object.keys(selectedProducts).length }, false);
+    for (const productId of Object.keys(selectedProducts)) {
+      const quantity = selectedProducts[productId];
+      const result = await createAssignment({ employeeId: selectedEmployee, productId: parseInt(productId), quantity });
       if (!result.success) allSuccess = false;
     }
       setAssignmentModalOpen(false);
     setSelectedProducts({});
     await mutateAssignments();
-    if (allSuccess) {
-      toast({ title: "Success", description: "Product(s) assigned successfully." });
-    } else {
+    if (!allSuccess) {
+      mutateAssignments({ assignments: prevAssignments, total: totalAssignments }, false); // Revert
       toast({ title: "Error", description: "Some assignments failed.", variant: "destructive" });
+    } else {
+      toast({ title: "Success", description: "Product(s) assigned successfully." });
     }
   };
 
-  // Handle updating an assignment quantity
+  // Optimistic Edit Assignment
   const handleSaveQuantity = async (assignmentId: number) => {
     if (newQuantity <= 0) {
-      toast({
-        title: "Error",
-        description: "Quantity must be greater than 0.",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: "Quantity must be greater than 0.", variant: "destructive" });
       return;
     }
-
+    const prevAssignments = assignments;
+    const optimisticAssignments = assignments.map(a => a.id === assignmentId ? { ...a, quantity: newQuantity } : a);
+    mutateAssignments({ assignments: optimisticAssignments, total: totalAssignments }, false);
     const result = await updateAssignment(assignmentId, newQuantity);
-
-    if (result.success) {
-      setEditingAssignment(null);
-      toast({
-        title: "Success",
-        description: "Assignment updated successfully.",
-      });
+    if (!result.success) {
+      mutateAssignments({ assignments: prevAssignments, total: totalAssignments }, false); // Revert
+      toast({ title: "Error", description: result.error || "Failed to update assignment.", variant: "destructive" });
     } else {
-      toast({
-        title: "Error",
-        description: result.error || "Failed to update assignment.",
-        variant: "destructive",
-      });
+      setEditingAssignment(null);
+      toast({ title: "Success", description: "Assignment updated successfully." });
+    }
+  };
+
+  // Optimistic Delete Assignment
+  const handleConfirmDelete = async () => {
+    if (!assignmentToDelete) return;
+    const prevAssignments = assignments;
+    const optimisticAssignments = assignments.filter(a => a.id !== assignmentToDelete);
+    mutateAssignments({ assignments: optimisticAssignments, total: totalAssignments - 1 }, false);
+    const result = await deleteAssignment(assignmentToDelete);
+    if (!result.success) {
+      mutateAssignments({ assignments: prevAssignments, total: totalAssignments }, false); // Revert
+      toast({ title: "Error", description: result.error || "Failed to delete assignment.", variant: "destructive" });
+    } else {
+      setDeleteConfirmOpen(false);
+      setAssignmentToDelete(null);
+      toast({ title: "Success", description: "Assignment deleted successfully." });
     }
   };
 
@@ -244,49 +265,38 @@ export function ProductAssignmentManager() {
     setNewQuantity(currentQuantity);
   };
 
-  // Handle confirming assignment deletion
-  const handleConfirmDelete = async () => {
-    if (!assignmentToDelete) return;
-
-    const result = await deleteAssignment(assignmentToDelete);
-
-    if (result.success) {
-      setDeleteConfirmOpen(false);
-      setAssignmentToDelete(null);
-      toast({
-        title: "Success",
-        description: "Assignment deleted successfully.",
-      });
-    } else {
-      toast({
-        title: "Error",
-        description: result.error || "Failed to delete assignment.",
-        variant: "destructive",
-      });
-    }
-  };
-
   // Handle initiating the deletion process
   const handleDeleteClick = (assignmentId: number) => {
     setAssignmentToDelete(assignmentId);
     setDeleteConfirmOpen(true);
   };
 
-  // Bulk assignment handler
+  // Optimistic Bulk Assign
   const handleBulkAssign = async () => {
     if (bulkSelectedEmployees.length === 0 || Object.keys(bulkSelectedProducts).length === 0) {
       toast({ title: "Error", description: "Select at least one employee and one product.", variant: "destructive" });
       return;
     }
     let allSuccess = true;
+    const prevAssignments = assignments;
+    const optimisticAssignments = [
+      ...bulkSelectedEmployees.flatMap(employeeId =>
+        Object.keys(bulkSelectedProducts).map(productId => ({
+          id: Date.now() + Math.random(),
+          employeeId,
+          productId: parseInt(productId),
+          quantity: bulkSelectedProducts[productId],
+          assignedAt: new Date().toISOString(),
+          status: "assigned"
+        }))
+      ),
+      ...assignments
+    ];
+    mutateAssignments({ assignments: optimisticAssignments, total: totalAssignments + bulkSelectedEmployees.length * Object.keys(bulkSelectedProducts).length }, false);
     for (const employeeId of bulkSelectedEmployees) {
       for (const productId of Object.keys(bulkSelectedProducts)) {
         const quantity = bulkSelectedProducts[productId];
-        const result = await createAssignment({
-          employeeId,
-          productId: parseInt(productId),
-          quantity,
-        });
+        const result = await createAssignment({ employeeId, productId: parseInt(productId), quantity });
         if (!result.success) allSuccess = false;
       }
     }
@@ -294,10 +304,11 @@ export function ProductAssignmentManager() {
     setBulkSelectedEmployees([]);
     setBulkSelectedProducts({});
     await mutateAssignments();
-    if (allSuccess) {
-      toast({ title: "Success", description: "Bulk assignment successful." });
-    } else {
+    if (!allSuccess) {
+      mutateAssignments({ assignments: prevAssignments, total: totalAssignments }, false); // Revert
       toast({ title: "Error", description: "Some assignments failed.", variant: "destructive" });
+    } else {
+      toast({ title: "Success", description: "Bulk assignment successful." });
     }
   };
 
@@ -523,14 +534,14 @@ export function ProductAssignmentManager() {
                         <div className="flex items-center space-x-3">
                           <Avatar>
                             <AvatarImage
-                              src={employee.user.image || employee.pictureUrl}
+                              src={getAvatarImage({ 
+                                image: employee.user.image, 
+                                pictureUrl: employee.pictureUrl 
+                              })}
                               alt={employee.user.name}
                             />
                             <AvatarFallback>
-                              {employee.user.name
-                                .split(" ")
-                                .map((n: string) => n[0])
-                                .join("")}
+                              {getAvatarInitials(employee.user.name)}
                             </AvatarFallback>
                           </Avatar>
                           <div>
@@ -595,6 +606,7 @@ export function ProductAssignmentManager() {
             </CardHeader>
             <CardContent>
               <div className="rounded-md border max-h-[400px] overflow-y-auto">
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -644,7 +656,7 @@ export function ProductAssignmentManager() {
                             </div>
                           </TableCell>
                               <TableCell>{first.productName}</TableCell>
-                              <TableCell>${first.productPrice.toFixed(2)}</TableCell>
+                              <TableCell>{formatAmount(first.productPrice)}</TableCell>
                           <TableCell>
                                 {editingAssignment === first.id ? (
                                 <Input
@@ -658,7 +670,7 @@ export function ProductAssignmentManager() {
                                   first.quantity
                                 )}
                               </TableCell>
-                              <TableCell>${first.totalValue.toFixed(2)}</TableCell>
+                              <TableCell>{formatAmount(first.totalValue)}</TableCell>
                               <TableCell>{formatDate(first.assignedAt)}</TableCell>
                               <TableCell className="text-right">
                                 <div className="flex justify-end space-x-2">
@@ -735,6 +747,7 @@ export function ProductAssignmentManager() {
                   </Button>
                 </div>
               )}
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -788,7 +801,7 @@ export function ProductAssignmentManager() {
                         }}
                         onClick={e => e.stopPropagation()}
                       />
-                      <span className="flex-1">{product.name} (${product.price.toFixed(2)})</span>
+                      <span className="flex-1">{product.name} ({formatAmount(product.price)})</span>
                       {isChecked && (
               <Input
                 type="number"
@@ -944,8 +957,14 @@ export function ProductAssignmentManager() {
                       onClick={e => e.stopPropagation()}
                     />
                     <Avatar className="h-7 w-7">
-                      <AvatarImage src={emp.user.image || emp.pictureUrl} alt={emp.user.name} />
-                      <AvatarFallback>{emp.user.name.split(' ').map(n => n[0]).join('')}</AvatarFallback>
+                      <AvatarImage 
+                        src={getAvatarImage({ 
+                          image: emp.user.image, 
+                          pictureUrl: emp.pictureUrl 
+                        })} 
+                        alt={emp.user.name} 
+                      />
+                      <AvatarFallback>{getAvatarInitials(emp.user.name)}</AvatarFallback>
                     </Avatar>
                     <div>
                       <div className="font-medium">{emp.user.name}</div>
@@ -1030,7 +1049,7 @@ export function ProductAssignmentManager() {
                         <span className="text-xs">No Image</span>
                       </div>
                     )}
-                    <span className="flex-1">{product.name} (${product.price.toFixed(2)})</span>
+                    <span className="flex-1">{product.name} ({formatAmount(product.price)})</span>
                     {isChecked && (
                       <Input
                         type="number"
@@ -1140,7 +1159,7 @@ export function ProductAssignmentManager() {
                   {groupedTodaysAssignments[viewMoreEmployeeId].map(assignment => (
                     <TableRow key={assignment.id}>
                       <TableCell>{assignment.productName}</TableCell>
-                      <TableCell>${assignment.productPrice.toFixed(2)}</TableCell>
+                      <TableCell>{formatAmount(assignment.productPrice)}</TableCell>
                       <TableCell>
                         {editingAssignment === assignment.id ? (
                           <Input
@@ -1154,7 +1173,7 @@ export function ProductAssignmentManager() {
                           assignment.quantity
                         )}
                       </TableCell>
-                      <TableCell>${assignment.totalValue.toFixed(2)}</TableCell>
+                      <TableCell>{formatAmount(assignment.totalValue)}</TableCell>
                       <TableCell>{formatDate(assignment.assignedAt)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end space-x-2">

@@ -4,15 +4,14 @@ import React from "react"
 import { useState, useEffect, useRef } from "react"
 import { ArrowUpDown, MoreHorizontal, Pencil, Trash2, UserCog, CheckCircle, PauseCircle, Search, BarChart2, FileText, CalendarCheck } from "lucide-react"
 import Link from "next/link"
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
 import { useRouter } from "next/navigation";
-import * as XLSX from "xlsx";
 import { PaginationControls } from "@/components/pagination-controls";
 import { useToast } from "@/components/ui/use-toast"
 import useSWR from "swr";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSWRConfig } from "swr";
+import { adminFetcher, fetchWithCSRF } from "@/lib/admin-api-client";
+import { sanitizeInput } from "@/lib/sanitizeInput";
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -30,6 +29,9 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog"
 import { EmployeeForm } from "@/components/employee-form"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import ExportProfileButton from "@/components/employee/ExportProfileButton"
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
+import { getAvatarImage, getAvatarInitials } from "@/lib/avatar-utils"
 
 const cityOptions = ["All", "Jakarta", "Surabaya", "Bandung"];
 const positionOptions = [
@@ -43,10 +45,7 @@ const positionOptions = [
 ];
 const statusOptions = ["All", "active", "inactive"];
 
-const fetcher = (url: string) => fetch(url).then(res => {
-  if (!res.ok) throw new Error("Failed to fetch employees");
-  return res.json();
-});
+// Using the CSRF-protected adminFetcher instead of a custom fetcher
 
 function EmployeeTableSkeleton({ pageSize = 10 }: { pageSize?: number }) {
   return (
@@ -140,8 +139,10 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
   const [isEditing, setIsEditing] = useState(false);
   const [editConfirmDialogOpen, setEditConfirmDialogOpen] = useState(false);
   const [formDataToConfirm, setFormDataToConfirm] = useState<any>(null);
+  const [bulkDeleteResults, setBulkDeleteResults] = useState<{ id: string, status: string, error?: string }[]>([]);
+  const [optimisticEmployees, setOptimisticEmployees] = useState<any[] | null>(null);
 
-  // Build query string for SWR
+  // Build query string for SWR - using the minimal API endpoint
   const queryParams = new URLSearchParams({
     page: page.toString(),
     pageSize: pageSize.toString(),
@@ -151,15 +152,17 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
   if (filterPosition && filterPosition !== "All") queryParams.append("position", filterPosition);
   if (filterStatus && filterStatus !== "All") queryParams.append("status", filterStatus);
   if (filterJoinDate) queryParams.append("joinDate", filterJoinDate);
-  const swrKey = `/api/employees?${queryParams.toString()}`;
+  
+  // Use the new minimal API endpoint for the initial table data
+  const swrKey = `/api/admin/employees/minimal?${queryParams.toString()}`;
 
   const {
     data,
     error: swrError,
     isLoading,
-  } = useSWR(swrKey, fetcher);
+  } = useSWR(swrKey, adminFetcher);
 
-  const employees = data?.employees || [];
+  const employees = optimisticEmployees !== null ? optimisticEmployees : data?.employees || [];
   const total = data?.total || 0;
 
   // Expand/collapse all helpers
@@ -340,8 +343,10 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
   // Delete handler
   const handleDelete = async () => {
     if (!employeeToDelete) return;
-    
     setIsDeleting(true);
+    // Optimistically remove employee from table
+    const prevEmployees = employees;
+    setOptimisticEmployees(employees.filter((e: any) => e.id !== employeeToDelete.id));
     try {
       const res = await fetch(`/api/employees/${employeeToDelete.id}`, {
         method: "DELETE",
@@ -354,7 +359,10 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
         description: "Employee deleted successfully.",
       });
       await mutate(swrKey);
+      setOptimisticEmployees(null); // Reset to SWR data
     } catch (err) {
+      // Rollback
+      setOptimisticEmployees(prevEmployees);
       toast({
         title: "Delete Failed",
         description: "Failed to delete employee. Please try again.",
@@ -368,20 +376,29 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
   // Bulk delete handler
   const handleBulkDelete = async () => {
     setBulkDeleting(true);
+    setBulkDeleteResults([]);
+    // Optimistically remove selected employees
+    const prevEmployees = employees;
+    setOptimisticEmployees(employees.filter((e: any) => !selectedEmployees.includes(e.id)));
     try {
       const res = await fetch("/api/employees/bulk-delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids: selectedEmployees }),
       });
-      if (!res.ok) throw new Error("Failed to bulk delete employees");
+      const data = await res.json();
       setBulkDeleteDialogOpen(false);
+      setBulkDeleteResults(data.results || []);
       toast({
-        title: "Employees Deleted",
-        description: "Selected employees deleted successfully.",
+        title: "Bulk Delete Complete",
+        description: `${data.results?.filter((r: any) => r.status === 'success').length || 0} succeeded, ${data.results?.filter((r: any) => r.status === 'error').length || 0} failed.`,
+        variant: data.results?.some((r: any) => r.status === 'error') ? "destructive" : "default",
       });
       await mutate(swrKey);
+      setOptimisticEmployees(null); // Reset to SWR data
     } catch (err) {
+      // Rollback
+      setOptimisticEmployees(prevEmployees);
       toast({
         title: "Bulk Delete Failed",
         description: "Failed to bulk delete employees. Please try again.",
@@ -395,10 +412,12 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
   // Fetch full details when opening the modal
   const openDetailsModal = async (employee: any) => {
     setDetailsDialogOpen(true);
-    setDetailsTab("profile");
     setDetailsLoading(true);
     setDetailsError(null);
+    setDetailsTab("profile");
+    
     try {
+      // Only fetch detailed data when opening the modal
       const res = await fetch(`/api/employees/${employee.id}/details`);
       if (!res.ok) throw new Error("Failed to fetch employee details");
       const data = await res.json();
@@ -411,144 +430,77 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
     }
   };
 
-  const handlePrintProfile = async () => {
-    if (!detailsEmployee) return;
-    // Build a styled HTML string for the PDF (narrow, fixed width)
-    const html = `
-      <div style="font-family: Arial, sans-serif; color: #222; padding: 8px; width: 400px; font-size: 10px;">
-        <div style="border-bottom: 2px solid #6366f1; padding-bottom: 6px; margin-bottom: 10px;">
-          <h1 style="margin: 0; color: #4f46e5; font-size: 1.2rem;">${detailsEmployee.user?.name}</h1>
-          <div style="font-size: 0.9rem; color: #555; margin-bottom: 2px;">${detailsEmployee.user?.email}</div>
-          <div style="font-size: 0.85rem; color: #666;">${detailsEmployee.position} | ${detailsEmployee.city} | Status: ${detailsEmployee.user?.status}</div>
-          <div style="font-size: 0.8rem; color: #888;">Joined: ${new Date(detailsEmployee.joinDate).toLocaleDateString()}</div>
-        </div>
-        <h2 style="color: #6366f1; border-bottom: 1px solid #e0e7ff; padding-bottom: 1px; font-size: 1rem;">Sales</h2>
-        <table style="width: 380px; table-layout: fixed; border-collapse: collapse; margin-bottom: 8px; font-size: 9px;">
-          <thead>
-            <tr style="background: #f3f4f6; color: #374151;">
-              <th style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">Date</th>
-              <th style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">Amount</th>
-              <th style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${detailsEmployee.sales.map((sale: any, i: number) => `
-              <tr style="background: ${i % 2 === 0 ? '#fff' : '#f9fafb'};">
-                <td style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">${new Date(sale.date).toLocaleDateString()}</td>
-                <td style="padding: 2px; border: 1px solid #e5e7eb; color: #10b981; font-weight: bold; word-break: break-word;">$${sale.amount}</td>
-                <td style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">${sale.notes || ''}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-        <h2 style="color: #6366f1; border-bottom: 1px solid #e0e7ff; padding-bottom: 1px; font-size: 1rem;">Attendance</h2>
-        <table style="width: 380px; table-layout: fixed; border-collapse: collapse; margin-bottom: 8px; font-size: 9px;">
-          <thead>
-            <tr style="background: #f3f4f6; color: #374151;">
-              <th style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">Date</th>
-              <th style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">Check-in</th>
-              <th style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">Check-out</th>
-              <th style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${detailsEmployee.attendance.map((att: any, i: number) => `
-              <tr style="background: ${i % 2 === 0 ? '#fff' : '#f9fafb'};">
-                <td style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">${new Date(att.date).toLocaleDateString()}</td>
-                <td style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">${att.checkIn ? new Date(att.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
-                <td style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">${att.checkOut ? new Date(att.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
-                <td style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">${att.status || '-'}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-        <h2 style="color: #6366f1; border-bottom: 1px solid #e0e7ff; padding-bottom: 1px; font-size: 1rem;">Documents</h2>
-        <table style="width: 380px; table-layout: fixed; border-collapse: collapse; margin-bottom: 8px; font-size: 9px;">
-          <thead>
-            <tr style="background: #f3f4f6; color: #374151;">
-              <th style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">Title</th>
-              <th style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">Type</th>
-              <th style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">Description</th>
-              <th style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">Uploaded</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${detailsEmployee.documents.map((doc: any, i: number) => `
-              <tr style="background: ${i % 2 === 0 ? '#fff' : '#f9fafb'};">
-                <td style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">${doc.title}</td>
-                <td style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">${doc.type}</td>
-                <td style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">${doc.description || ''}</td>
-                <td style="padding: 2px; border: 1px solid #e5e7eb; word-break: break-word;">${doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : ''}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-    `;
-    const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
-    await pdf.html(html, {
-      margin: [8, 8, 8, 8],
-      autoPaging: 'text',
-      x: 0,
-      y: 0,
-      width: 400,
-      windowWidth: 400,
-      html2canvas: { scale: 1 },
-      callback: function (doc) {
-        doc.save(`${detailsEmployee.user?.name}-profile.pdf`);
-      }
-    });
+  // Add this function to handle optimistic add
+  const handleOptimisticAdd = async (newEmployeeData: any, onSuccess: () => void) => {
+    // Create a temporary ID for the optimistic row
+    const tempId = `temp-${Date.now()}`;
+    const optimisticRow = {
+      ...newEmployeeData,
+      id: tempId,
+      user: {
+        name: newEmployeeData.name,
+        email: newEmployeeData.email,
+        phoneNumber: newEmployeeData.phoneNumber,
+        status: newEmployeeData.status || "Active",
+      },
+      // Add any other fields needed for display
+    };
+    const prevEmployees = employees;
+    setOptimisticEmployees([optimisticRow, ...employees]);
+    try {
+      const res = await fetch("/api/employees", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newEmployeeData),
+      });
+      if (!res.ok) throw new Error("Failed to add employee");
+      toast({ title: "Success", description: "Employee added successfully!" });
+      await mutate(swrKey);
+      setOptimisticEmployees(null);
+      onSuccess();
+    } catch (err) {
+      setOptimisticEmployees(prevEmployees);
+      toast({ title: "Add Failed", description: "Failed to add employee. Please try again.", variant: "destructive" });
+    }
   };
 
-  const handleDownloadExcel = () => {
-    if (!detailsEmployee) return;
-    // Personal Info sheet
-    const personalInfo = [
-      ["Name", detailsEmployee.user?.name],
-      ["Email", detailsEmployee.user?.email],
-      ["Phone Number", detailsEmployee.user?.phoneNumber || '-'],
-      ["Position", detailsEmployee.position],
-      ["City", detailsEmployee.city],
-      ["Status", detailsEmployee.user?.status],
-      ["Join Date", new Date(detailsEmployee.joinDate).toLocaleDateString()],
-    ];
-    // Sales sheet
-    const salesSheet = [
-      ["Date", "Amount", "Notes"],
-      ...detailsEmployee.sales.map((sale: any) => [
-        new Date(sale.date).toLocaleDateString(),
-        sale.amount,
-        sale.notes || ""
-      ])
-    ];
-    // Attendance sheet
-    const attendanceSheet = [
-      ["Date", "Check-in", "Check-out", "Status"],
-      ...detailsEmployee.attendance.map((att: any) => [
-        new Date(att.date).toLocaleDateString(),
-        att.checkIn ? new Date(att.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-',
-        att.checkOut ? new Date(att.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-',
-        att.status || "-"
-      ])
-    ];
-    // Documents sheet
-    const documentsSheet = [
-      ["Title", "Type", "Description", "Uploaded"],
-      ...detailsEmployee.documents.map((doc: any) => [
-        doc.title,
-        doc.type,
-        doc.description || "",
-        doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : ""
-      ])
-    ];
-    // Create workbook
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(personalInfo), "Personal Info");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(salesSheet), "Sales");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(attendanceSheet), "Attendance");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(documentsSheet), "Documents");
-    // Download
-    XLSX.writeFile(wb, `${detailsEmployee.user?.name.replace(/\s+/g, '_')}_profile.xlsx`);
+  // Add this function to handle optimistic edit
+  const handleOptimisticEdit = async (id: any, updatedData: any, onSuccess: () => void) => {
+    const prevEmployees = employees;
+    // Optimistically update the employee in the table
+    setOptimisticEmployees(
+      employees.map((e: any) =>
+        e.id === id
+          ? {
+              ...e,
+              ...updatedData,
+              user: {
+                ...e.user,
+                ...updatedData.user,
+                name: updatedData.name || e.user?.name,
+                email: updatedData.email || e.user?.email,
+                phoneNumber: updatedData.phoneNumber || e.user?.phoneNumber,
+                status: updatedData.status || e.user?.status,
+              },
+            }
+          : e
+      )
+    );
+    try {
+      const res = await fetch(`/api/employees/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updatedData),
+      });
+      if (!res.ok) throw new Error("Failed to update employee");
+      toast({ title: "Success", description: "Employee updated successfully!" });
+      await mutate(swrKey);
+      setOptimisticEmployees(null);
+      onSuccess();
+    } catch (err) {
+      setOptimisticEmployees(prevEmployees);
+      toast({ title: "Edit Failed", description: "Failed to update employee. Please try again.", variant: "destructive" });
+    }
   };
 
   if (isLoading) {
@@ -565,15 +517,15 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
         <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-4 gap-4 w-full">
           <div className="flex flex-wrap gap-2 items-center mb-6">
             <label className="text-sm mr-1" htmlFor="filter-city">City</label>
-            <select id="filter-city" value={filterCity} onChange={e => { setFilterCity(e.target.value); setPage(1); }} className="border rounded px-1.5 py-1 text-sm h-8">
+            <select id="filter-city" value={filterCity} onChange={e => { setFilterCity(e.target.value); setPage(1); }} className="border rounded px-1.5 py-1 text-sm h-8 filter-select">
               {cityOptions.map(city => <option key={city} value={city}>{city}</option>)}
             </select>
             <label className="text-sm ml-2 mr-1" htmlFor="filter-position">Position</label>
-            <select id="filter-position" value={filterPosition} onChange={e => { setFilterPosition(e.target.value); setPage(1); }} className="border rounded px-1.5 py-1 text-sm h-8">
+            <select id="filter-position" value={filterPosition} onChange={e => { setFilterPosition(e.target.value); setPage(1); }} className="border rounded px-1.5 py-1 text-sm h-8 filter-select">
               {positionOptions.map(pos => <option key={pos} value={pos}>{pos}</option>)}
             </select>
             <label className="text-sm ml-2 mr-1" htmlFor="filter-status">Status</label>
-            <select id="filter-status" value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1); }} className="border rounded px-1.5 py-1 text-sm h-8">
+            <select id="filter-status" value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1); }} className="border rounded px-1.5 py-1 text-sm h-8 filter-select">
               {statusOptions.map(status => <option key={status} value={status}>{status}</option>)}
             </select>
             <label className="text-sm ml-2 mr-1" htmlFor="filter-joindate">Join Date</label>
@@ -599,7 +551,7 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
           <DialogHeader>
             <DialogTitle>Add New Employee</DialogTitle>
           </DialogHeader>
-          <EmployeeForm onSuccess={async () => { setOpen(false); await mutate(swrKey); }} />
+          <EmployeeForm onSubmit={data => handleOptimisticAdd(data, () => setOpen(false))} />
         </DialogContent>
       </Dialog>
       <div className="rounded-md border max-h-[500px] overflow-y-auto w-full">
@@ -642,27 +594,56 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
                 <TableCell colSpan={8} className="text-center">No employees found.</TableCell>
               </TableRow>
             ) : (
-              employees.map((employee: any) => (
-              <TableRow key={employee.id}>
+              <TooltipProvider delayDuration={0}>
+                {employees.map((employee: any) => {
+                  const result = bulkDeleteResults.find(r => r.id == employee.id);
+                  const isError = result?.status === "error";
+                  const isSuccess = result && result.status !== "error";
+                  return (
+                    <TableRow
+                      key={employee.id}
+                      className={isError ? "bg-red-50" : isSuccess ? "bg-green-50" : ""}
+                    >
                 <TableCell>
                   <Checkbox
                     checked={selectedEmployees.includes(employee.id)}
                     onCheckedChange={() => toggleSelectEmployee(employee.id)}
                   />
+                        {result ? (
+                          isError ? (
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <span><Trash2 className="h-5 w-5 text-red-500 inline ml-1" /></span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{result.error || "Error"}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <span><CheckCircle className="h-5 w-5 text-green-500 inline ml-1" /></span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Deleted</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )
+                        ) : null}
                 </TableCell>
                 <TableCell className="font-medium">{employee.id}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-3">
                     <Avatar className="h-9 w-9">
                       <AvatarImage
-                        src={`/abstract-geometric-shapes.png?height=36&width=36&query=${employee.user?.name ?? ""}`}
+                        src={getAvatarImage({ 
+                          image: employee.user?.image, 
+                          pictureUrl: employee.pictureUrl 
+                        })}
                         alt={employee.user?.name ?? ""}
                       />
                       <AvatarFallback>
-                        {(employee.user?.name ?? "")
-                          .split(" ")
-                          .map((n: string) => n[0])
-                          .join("")}
+                        {getAvatarInitials(employee.user?.name)}
                       </AvatarFallback>
                     </Avatar>
                     <div>
@@ -735,7 +716,9 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
                   </DropdownMenu>
                 </TableCell>
               </TableRow>
-              ))
+                  );
+                })}
+              </TooltipProvider>
             )}
           </TableBody>
         </Table>
@@ -754,12 +737,7 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
           {editEmployee && (
             <EditEmployeeForm
               employee={editEmployee}
-              onSuccess={async () => {
-                setEditDialogOpen(false);
-                setEditEmployee(null);
-                await mutate(swrKey);
-              }}
-              onSubmit={handleEditSubmit}
+              onSubmit={data => handleOptimisticEdit(editEmployee.id, data, () => { setEditDialogOpen(false); setEditEmployee(null); })}
             />
           )}
         </DialogContent>
@@ -970,14 +948,14 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
                 <div className="md:w-1/3 w-full flex flex-col items-center md:items-start gap-6 border-r border-gray-200 pr-0 md:pr-8 mb-8 md:mb-0">
                   <Avatar className="h-28 w-28 shadow-lg border-4 border-white -mt-2">
                     <AvatarImage
-                      src={`/abstract-geometric-shapes.png?height=112&width=112&query=${detailsEmployee.user?.name ?? ""}`}
+                      src={getAvatarImage({ 
+                        image: detailsEmployee.user?.image, 
+                        pictureUrl: detailsEmployee.pictureUrl 
+                      })}
                       alt={detailsEmployee.user?.name ?? ""}
                     />
                     <AvatarFallback className="text-3xl">
-                      {(detailsEmployee.user?.name ?? "")
-                        .split(" ")
-                        .map((n: string) => n[0])
-                        .join("")}
+                      {getAvatarInitials(detailsEmployee.user?.name)}
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex flex-col items-center md:items-start gap-1 w-full">
@@ -1125,7 +1103,7 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
                         </Button>
                       </div>
                       <div className="flex gap-2 mb-3">
-                        <select className="text-sm border rounded px-2 py-1" value={documentTypeFilter} onChange={e => setDocumentTypeFilter(e.target.value)}>
+                        <select className="text-sm border rounded px-2 py-1 filter-select" value={documentTypeFilter} onChange={e => setDocumentTypeFilter(e.target.value)}>
                           <option>All Types</option>
                           <option>ID Proof</option>
                           <option>Certificates</option>
@@ -1194,12 +1172,8 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
           </div>
           {/* Print Profile as PDF Button */}
           <div className="flex justify-end mt-6 px-10 pb-6 gap-2">
-            <Button variant="outline" onClick={handlePrintProfile}>
-              Print Profile as PDF
-            </Button>
-            <Button variant="outline" onClick={handleDownloadExcel}>
-              Download as Excel
-            </Button>
+            <ExportProfileButton employee={detailsEmployee} type="pdf" disabled={!detailsEmployee} />
+            <ExportProfileButton employee={detailsEmployee} type="excel" disabled={!detailsEmployee} />
           </div>
         </DialogContent>
       </Dialog>
@@ -1214,10 +1188,10 @@ export function EmployeeTable({ search, setSearch }: { search: string, setSearch
         to={Math.min(page * pageSize, total)}
       />
     </div>
-  )
+  );
 }
 
-function EditEmployeeForm({ employee, onSuccess, onSubmit }: { employee: any, onSuccess: () => void, onSubmit: (data: any) => void }) {
+function EditEmployeeForm({ employee, onSubmit }: { employee: any, onSubmit: (data: any) => void }) {
   const initialName = employee.user?.name || "";
   const initialEmail = employee.user?.email || "";
   const [form, setForm] = useState({
@@ -1231,16 +1205,43 @@ function EditEmployeeForm({ employee, onSuccess, onSubmit }: { employee: any, on
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Real-time feedback state
   const [uniqueStatus, setUniqueStatus] = useState({
     name: { loading: false, available: true, message: "" },
     email: { loading: false, available: true, message: "" }
   });
-  // Track if user has interacted with name/email fields
-  const [touched, setTouched] = useState({ name: false, email: false });
+  
+  // Track if user has interacted with fields
+  const [touched, setTouched] = useState({ 
+    name: false, 
+    email: false, 
+    phoneNumber: false,
+    city: false,
+    position: false,
+    startDate: false
+  });
+  
   // Track if user has changed the value from the initial value
-  const [dirty, setDirty] = useState({ name: false, email: false });
+  const [dirty, setDirty] = useState({ 
+    name: false, 
+    email: false,
+    phoneNumber: false,
+    city: false,
+    position: false,
+    startDate: false
+  });
+
+  // Validation errors for each field
+  const [fieldErrors, setFieldErrors] = useState({
+    name: "",
+    email: "",
+    phoneNumber: "",
+    city: "",
+    position: "",
+    startDate: ""
+  });
 
   // List of valid Indonesian mobile prefixes (not exhaustive)
   const validPrefixes = [
@@ -1252,6 +1253,55 @@ function EditEmployeeForm({ employee, onSuccess, onSubmit }: { employee: any, on
     '+62881', '+62882', '+62883', '+62884', '+62885', '+62886', '+62887', '+62888', '+62889', // Smartfren
     '+62895', '+62896', '+62897', '+62898', '+62899', // Three
   ];
+
+  // Name validation
+  const validateName = (value: string): string => {
+    const sanitized = sanitizeInput(value);
+    if (!sanitized) return "Name is required";
+    if (!/^[A-Za-z\s]+$/.test(sanitized)) return "Name must contain only letters and spaces";
+    return "";
+  };
+
+  // Email validation
+  const validateEmail = (value: string): string => {
+    if (!value) return "Email is required";
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) return "Invalid email format";
+    return "";
+  };
+
+  // Phone number validation
+  const validatePhoneNumber = (value: string): string => {
+    const sanitized = value.replace(/\s+/g, '');
+    if (!sanitized) return "Phone number is required";
+    if (!/^\+62\d{9,13}$/.test(sanitized)) return "Phone number must be in Indonesian format: +62xxxxxxxxxxx";
+    if (!isValidIndonesianMobileNumber(sanitized)) return "Invalid phone number. Please enter a real Indonesian mobile number";
+    return "";
+  };
+
+  // Generic field validation
+  const validateField = (fieldName: string, value: string): string => {
+    switch (fieldName) {
+      case 'name':
+        return validateName(value);
+      case 'email':
+        return validateEmail(value);
+      case 'phoneNumber':
+        return validatePhoneNumber(value);
+      case 'city':
+        return !value ? "City is required" : "";
+      case 'position':
+        return !value ? "Position is required" : "";
+      case 'startDate':
+        if (!value) return "Start date is required";
+        const date = new Date(value);
+        const now = new Date();
+        if (date > now) return "Start date cannot be in the future";
+        return "";
+      default:
+        return "";
+    }
+  };
+
   function isValidIndonesianMobileNumber(number: string) {
     if (!/^\+62\d{9,13}$/.test(number)) return false;
     return validPrefixes.some(prefix => number.startsWith(prefix));
@@ -1259,10 +1309,25 @@ function EditEmployeeForm({ employee, onSuccess, onSubmit }: { employee: any, on
 
   // Helper to check uniqueness with status update
   const handleUniqueCheck = async (field: "name" | "email", value: string) => {
+    // First validate the field format
+    const validationError = validateField(field, value);
+    if (validationError) {
+      setFieldErrors(prev => ({ ...prev, [field]: validationError }));
+      setUniqueStatus(prev => ({
+        ...prev,
+        [field]: { loading: false, available: false, message: validationError }
+      }));
+      return;
+    }
+
+    // Clear field errors if validation passes
+    setFieldErrors(prev => ({ ...prev, [field]: "" }));
+
     setUniqueStatus(prev => ({
       ...prev,
       [field]: { ...prev[field], loading: true, message: "Checking..." }
     }));
+    
     if (!value) {
       setUniqueStatus(prev => ({
         ...prev,
@@ -1270,6 +1335,7 @@ function EditEmployeeForm({ employee, onSuccess, onSubmit }: { employee: any, on
       }));
       return;
     }
+    
     // Don't check if value is unchanged from original
     if (value === (field === "name" ? employee.user?.name : employee.user?.email)) {
       setUniqueStatus(prev => ({
@@ -1278,124 +1344,276 @@ function EditEmployeeForm({ employee, onSuccess, onSubmit }: { employee: any, on
       }));
       return;
     }
+    
+    try {
     const res = await fetch("/api/check-unique", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ field, value }),
+        body: JSON.stringify({ field, value: sanitizeInput(value) }),
     });
     const data = await res.json();
+      
     setUniqueStatus(prev => ({
       ...prev,
       [field]: {
         loading: false,
         available: data.available,
-        message: data.available ? "" : (field === "name" ? "Name already exists" : "Email already exists")
+          message: data.available ? "Available" : (field === "name" ? "Name already exists" : "Email already exists")
       }
     }));
+      
     if (!data.available) {
-      setError(data.message || (field === "name" ? "Name already exists" : "Email already exists"));
+        const errorMsg = data.message || (field === "name" ? "Name already exists" : "Email already exists");
+        setError(errorMsg);
+      }
+    } catch (error) {
+      setUniqueStatus(prev => ({
+        ...prev,
+        [field]: { loading: false, available: false, message: "Error checking availability" }
+      }));
     }
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setForm({ ...form, [name]: name === 'phoneNumber' ? value.replace(/\s+/g, '') : value });
-    if (name === "name" || name === "email") {
-      setTouched(t => ({ ...t, [name]: true }));
-      setDirty(d => ({ ...d, [name]: value !== (name === "name" ? initialName : initialEmail) }));
+    const sanitizedValue = name === 'phoneNumber' ? value.replace(/\s+/g, '') : value;
+    setForm({ ...form, [name]: sanitizedValue });
+    setTouched(prev => ({ ...prev, [name]: true }));
+
+    // Validate field immediately
+    let validationError = validateField(name, sanitizedValue);
+    setFieldErrors(prev => ({ ...prev, [name]: validationError }));
+
+    if (error) setError(null);
+
+    // For name and email fields, handle uniqueness check ONLY if valid
+    if ((name === "name" || name === "email")) {
+      if (validationError) {
+        // If there's a validation error, clear uniqueness status and don't check
+        setUniqueStatus(prev => ({
+          ...prev,
+          [name]: { loading: false, available: false, message: "" }
+        }));
+      } else {
+        // Only check uniqueness if validation passes
+        handleUniqueCheck(name as "name" | "email", sanitizedValue);
+      }
+    }
+  };
+
+  const handleBlur = (e: React.FocusEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setTouched(prev => ({ ...prev, [name]: true }));
+    
+    // Validate on blur
+    const validationError = validateField(name, value);
+    setFieldErrors(prev => ({ ...prev, [name]: validationError }));
+    
+    if ((name === "name" || name === "email") && !validationError) {
       handleUniqueCheck(name as "name" | "email", value);
     }
   };
-  const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    if (name === "name" || name === "email") {
-      setTouched(t => ({ ...t, [name]: true }));
-      setDirty(d => ({ ...d, [name]: value !== (name === "name" ? initialName : initialEmail) }));
-      handleUniqueCheck(name as "name" | "email", value);
+
+  // Check if form is valid
+  const isFormValid = () => {
+    const hasErrors = Object.values(fieldErrors).some(error => error !== "");
+    const hasEmptyRequired = !form.name || !form.email || !form.phoneNumber || !form.city || !form.position || !form.startDate;
+    const notLoading = !uniqueStatus.name.loading && !uniqueStatus.email.loading;
+    
+    // If there are validation errors, form is invalid regardless of uniqueness
+    if (hasErrors || hasEmptyRequired || !notLoading) {
+      return false;
+    }
+    
+    // Only check uniqueness if there are no validation errors
+    const uniquenessValid = uniqueStatus.name.available && uniqueStatus.email.available;
+    
+    return uniquenessValid;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Prevent multiple submissions
+    if (isSubmitting || loading) {
+      return;
+    }
+    
+    setError(null);
+    setIsSubmitting(true);
+    
+    // Final validation
+    const errors: any = {};
+    Object.keys(form).forEach(key => {
+      const error = validateField(key, form[key as keyof typeof form]);
+      if (error) errors[key] = error;
+    });
+    
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      setError("Please fix all validation errors before submitting");
+      setIsSubmitting(false);
+      return;
+    }
+    
+    // Check uniqueness one final time
+    if (!uniqueStatus.name.available) {
+      setError("Name already exists");
+      setIsSubmitting(false);
+      return;
+    }
+    
+    if (!uniqueStatus.email.available) {
+      setError("Email already exists");
+      setIsSubmitting(false);
+      return;
+    }
+    
+    // Validate phone number format and real number
+    const trimmedPhone = form.phoneNumber.replace(/\s+/g, '');
+    if (!/^\+62\d{9,13}$/.test(trimmedPhone)) {
+      setError("Phone number must be in Indonesian format: +62xxxxxxxxxxx");
+      setIsSubmitting(false);
+      return;
+    }
+    
+    if (!isValidIndonesianMobileNumber(trimmedPhone)) {
+      setError("Invalid phone number. Please enter a real Indonesian mobile number, e.g., +628123456789");
+      setIsSubmitting(false);
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      await onSubmit({ 
+        ...form, 
+        name: sanitizeInput(form.name),
+        email: sanitizeInput(form.email),
+        phoneNumber: trimmedPhone 
+      });
+    } catch (error) {
+      setError("Failed to update employee. Please try again.");
+    } finally {
+      setLoading(false);
+      setIsSubmitting(false);
     }
   };
 
   // Real-time phone number feedback
-  const value = form.phoneNumber || "";
-  const isFormatValid = /^\+62\d{9,13}$/.test(value);
-  const isRealNumber = isFormatValid && isValidIndonesianMobileNumber(value);
-  let phoneMessage = '';
-  if (!isFormatValid && value) {
-    phoneMessage = 'Invalid phone number format. Example: +628123456789';
-  } else if (isFormatValid && !isRealNumber) {
-    phoneMessage = 'Invalid phone number. Please enter a real Indonesian mobile number, e.g., +628123456789';
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    // Validate Indonesian phone number format and real number
-    const trimmedPhone = form.phoneNumber.replace(/\s+/g, '');
-    if (!/^\+62\d{9,13}$/.test(trimmedPhone)) {
-      setError("Phone number must be in Indonesian format: +62xxxxxxxxxxx");
-      return;
-    }
-    if (!isValidIndonesianMobileNumber(trimmedPhone)) {
-      setError("Invalid phone number. Please enter a real Indonesian mobile number, e.g., +628123456789");
-      return;
-    }
-    if (!uniqueStatus.name.available) {
-      setError("Name already exists");
-      return;
-    }
-    if (!uniqueStatus.email.available) {
-      setError("Email already exists");
-      return;
-    }
-    onSubmit({ ...form, phoneNumber: trimmedPhone });
-  };
+  const phoneValue = form.phoneNumber || "";
+  const isPhoneFormatValid = /^\+62\d{9,13}$/.test(phoneValue);
+  const isRealPhoneNumber = isPhoneFormatValid && isValidIndonesianMobileNumber(phoneValue);
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      {error && <div className="text-red-600 text-center mb-2">{error}</div>}
+      {error && <div className="text-red-600 text-center mb-2 p-2 bg-red-50 border border-red-200 rounded">{error}</div>}
       <div className="grid gap-6 md:grid-cols-2">
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Name</label>
-            <input name="name" value={form.name} onChange={handleChange} onBlur={handleBlur} className="w-full border rounded px-2 py-2" required />
-            {dirty.name && touched.name && uniqueStatus.name.loading && (
-              <span className="block text-xs text-blue-500 mt-1">Checking...</span>
-            )}
-            {dirty.name && touched.name && !uniqueStatus.name.loading && form.name && (
-              <span className={`block text-xs mt-1 ${uniqueStatus.name.available ? 'text-green-500' : 'text-red-500'}`}>{uniqueStatus.name.available ? 'Available' : 'Not available'}</span>
-            )}
+            <label className="block text-sm font-medium mb-1">Name *</label>
+            <input 
+              name="name" 
+              value={form.name} 
+              onChange={handleChange} 
+              onBlur={handleBlur} 
+              className={`w-full border rounded px-2 py-2 ${fieldErrors.name ? 'border-red-500' : 'border-gray-300'} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+              required 
+              maxLength={50}
+              disabled={loading || isSubmitting}
+            />
+            {fieldErrors.name
+              ? <span className="block text-xs text-red-500 mt-1">{fieldErrors.name}</span>
+              : touched.name && (
+                  uniqueStatus.name.loading
+                    ? <span className="block text-xs text-blue-500 mt-1">Checking availability...</span>
+                    : (form.name && <span className={`block text-xs mt-1 ${uniqueStatus.name.available ? 'text-green-500' : 'text-red-500'}`}>
+                        {uniqueStatus.name.message || (uniqueStatus.name.available ? 'Available' : 'Not available')}
+                      </span>)
+                )
+            }
           </div>
+          
           <div>
-            <label className="block text-sm font-medium mb-1">Email</label>
-            <input name="email" type="email" value={form.email} onChange={handleChange} onBlur={handleBlur} className="w-full border rounded px-2 py-2" required />
-            {dirty.email && touched.email && uniqueStatus.email.loading && (
-              <span className="block text-xs text-blue-500 mt-1">Checking...</span>
-            )}
-            {dirty.email && touched.email && !uniqueStatus.email.loading && form.email && (
-              <span className={`block text-xs mt-1 ${uniqueStatus.email.available ? 'text-green-500' : 'text-red-500'}`}>{uniqueStatus.email.available ? 'Available' : 'Not available'}</span>
-            )}
+            <label className="block text-sm font-medium mb-1">Email *</label>
+            <input 
+              name="email" 
+              type="email" 
+              value={form.email} 
+              onChange={handleChange} 
+              onBlur={handleBlur} 
+              className={`w-full border rounded px-2 py-2 ${fieldErrors.email ? 'border-red-500' : 'border-gray-300'} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+              required 
+              maxLength={100}
+              disabled={loading || isSubmitting}
+            />
+            {fieldErrors.email
+              ? <span className="block text-xs text-red-500 mt-1">{fieldErrors.email}</span>
+              : touched.email && (
+                  uniqueStatus.email.loading
+                    ? <span className="block text-xs text-blue-500 mt-1">Checking availability...</span>
+                    : (form.email && <span className={`block text-xs mt-1 ${uniqueStatus.email.available ? 'text-green-500' : 'text-red-500'}`}>
+                        {uniqueStatus.email.message || (uniqueStatus.email.available ? 'Available' : 'Not available')}
+                      </span>)
+                )
+            }
           </div>
+          
           <div>
-            <label className="block text-sm font-medium mb-1">Phone Number</label>
-            <input name="phoneNumber" value={form.phoneNumber} onChange={handleChange} className="w-full border rounded px-2 py-2" placeholder="+6281234567890" required />
-            {form.phoneNumber && (
-              <span className={`block text-xs mt-1 ${isRealNumber ? 'text-green-500' : 'text-red-500'}`}>{isRealNumber ? 'Valid' : phoneMessage}</span>
+            <label className="block text-sm font-medium mb-1">Phone Number *</label>
+            <input 
+              name="phoneNumber" 
+              value={form.phoneNumber} 
+              onChange={handleChange} 
+              onBlur={handleBlur}
+              className={`w-full border rounded px-2 py-2 ${fieldErrors.phoneNumber ? 'border-red-500' : 'border-gray-300'} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+              placeholder="+6281234567890" 
+              required 
+              disabled={loading || isSubmitting}
+            />
+            {fieldErrors.phoneNumber && (
+              <span className="block text-xs text-red-500 mt-1">{fieldErrors.phoneNumber}</span>
+            )}
+            {!fieldErrors.phoneNumber && form.phoneNumber && (
+              <span className={`block text-xs mt-1 ${isRealPhoneNumber ? 'text-green-500' : 'text-red-500'}`}>
+                {isRealPhoneNumber ? 'Valid Indonesian mobile number' : 'Invalid phone number format. Example: +628123456789'}
+              </span>
             )}
           </div>
         </div>
+        
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">City</label>
-            <select name="city" value={form.city} onChange={handleChange} className="w-full border rounded px-2 py-2" required>
+            <label className="block text-sm font-medium mb-1">City *</label>
+            <select 
+              name="city" 
+              value={form.city} 
+              onChange={handleChange} 
+              onBlur={handleBlur}
+              className={`w-full border rounded px-2 py-2 ${fieldErrors.city ? 'border-red-500' : 'border-gray-300'} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+              required
+              disabled={loading || isSubmitting}
+            >
               <option value="">Select city</option>
               <option value="Jakarta">Jakarta</option>
               <option value="Surabaya">Surabaya</option>
               <option value="Bandung">Bandung</option>
             </select>
+            {fieldErrors.city && (
+              <span className="block text-xs text-red-500 mt-1">{fieldErrors.city}</span>
+            )}
           </div>
+          
           <div>
-            <label className="block text-sm font-medium mb-1">Position</label>
-            <select name="position" value={form.position} onChange={handleChange} className="w-full border rounded px-2 py-2" required>
+            <label className="block text-sm font-medium mb-1">Position *</label>
+            <select 
+              name="position" 
+              value={form.position} 
+              onChange={handleChange} 
+              onBlur={handleBlur}
+              className={`w-full border rounded px-2 py-2 ${fieldErrors.position ? 'border-red-500' : 'border-gray-300'} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+              required
+              disabled={loading || isSubmitting}
+            >
               <option value="">Select position</option>
               <option value="Sales Representative">Sales Representative</option>
               <option value="Account Manager">Account Manager</option>
@@ -1422,26 +1640,61 @@ function EditEmployeeForm({ employee, onSuccess, onSubmit }: { employee: any, on
               <option value="Logistics Specialist">Logistics Specialist</option>
               <option value="Supply Chain Manager">Supply Chain Manager</option>
             </select>
+            {fieldErrors.position && (
+              <span className="block text-xs text-red-500 mt-1">{fieldErrors.position}</span>
+            )}
           </div>
+          
           <div>
-            <label className="block text-sm font-medium mb-1">Status</label>
-            <select name="status" value={form.status} onChange={handleChange} className="w-full border rounded px-2 py-2" required>
+            <label className="block text-sm font-medium mb-1">Status *</label>
+            <select 
+              name="status" 
+              value={form.status} 
+              onChange={handleChange} 
+              className="w-full border border-gray-300 rounded px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" 
+              required
+              disabled={loading || isSubmitting}
+            >
               <option value="Active">Active</option>
               <option value="Inactive">Inactive</option>
             </select>
           </div>
+          
           <div>
-            <label className="block text-sm font-medium mb-1">Join Date</label>
-            <input name="startDate" type="date" value={form.startDate} onChange={handleChange} className="w-full border rounded px-2 py-2" required />
+            <label className="block text-sm font-medium mb-1">Join Date *</label>
+            <input 
+              name="startDate" 
+              type="date" 
+              value={form.startDate} 
+              onChange={handleChange} 
+              onBlur={handleBlur}
+              className={`w-full border rounded px-2 py-2 ${fieldErrors.startDate ? 'border-red-500' : 'border-gray-300'} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+              required 
+              max={new Date().toISOString().split('T')[0]}
+              disabled={loading || isSubmitting}
+            />
+            {fieldErrors.startDate && (
+              <span className="block text-xs text-red-500 mt-1">{fieldErrors.startDate}</span>
+            )}
           </div>
         </div>
       </div>
+      
       <div className="flex justify-end gap-2 mt-4">
-        <Button type="button" variant="outline" onClick={() => onSuccess()}>
+        <Button 
+          type="button" 
+          variant="outline" 
+          onClick={() => {}}
+          disabled={loading || isSubmitting}
+        >
           Cancel
         </Button>
-        <Button type="submit" disabled={loading || !uniqueStatus.name.available || !uniqueStatus.email.available || !isRealNumber}>
-        {loading ? "Saving..." : "Save Changes"}
+        <Button 
+          type="submit" 
+          disabled={!isFormValid() || loading || isSubmitting || uniqueStatus.name.loading || uniqueStatus.email.loading}
+          className={`${!isFormValid() ? 'opacity-50 cursor-not-allowed' : ''}`}
+        >
+          {loading || isSubmitting ? "Saving..." : "Save Changes"}
         </Button>
       </div>
     </form>
@@ -1459,7 +1712,7 @@ export function EmployeeTableSearchInput({ search, setSearch }: { search: string
         value={search}
         onChange={e => setSearch(e.target.value)}
         placeholder="Search employees..."
-        className="w-full pl-10 pr-4 py-2 rounded-full border border-gray-300 bg-gray-50 focus:bg-white focus:border-primary focus:outline-none transition-colors"
+        className="w-full pl-10 pr-4 py-2 rounded-full border border-gray-300 bg-gray-50 focus:bg-white focus:border-gray-400 focus:ring-2 focus:ring-gray-200 focus:outline-none transition-colors"
       />
     </div>
   );

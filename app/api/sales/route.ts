@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
       }
       const status = searchParams.get('status');
       if (status && status !== 'all') {
-        where.employee = { ...(where.employee || {}), status };
+        where.employee = { ...(where.employee || {}), user: { status } };
       }
       const from = searchParams.get('from');
       if (from) {
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
       }
       const employeeId = searchParams.get('employeeId');
       if (employeeId && employeeId !== 'all') {
-        const employeeList = employeeId.split(',').map(Number);
+        const employeeList = employeeId.split(',').map(employeeId => ({ id: Number(employeeId) }));
         where.employeeId = { in: employeeList };
       }
       // Pagination
@@ -65,16 +65,39 @@ export async function GET(req: NextRequest) {
       const total = await prisma.sale.count({ where });
       const sales = await prisma.sale.findMany({
         where,
-        include: {
-          product: true,
-          employee: { include: { user: true } }
+        select: {
+          id: true,
+          date: true,
+          amount: true,
+          quantity: true,
+          notes: true,
+          productId: true,
+          product: {
+            select: {
+              name: true,
+              price: true,
+              description: true,
+            }
+          },
+          employeeId: true,
+          employee: {
+            select: {
+              city: true,
+              user: {
+                select: {
+                  name: true,
+                  email: true,
+                }
+              }
+            }
+          }
         },
         orderBy: { date: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
       });
       // Map sales to flat structure for frontend
-      const result = sales.map(sale => {
+      const result = sales.map((sale: any) => {
             const dateObj = new Date(sale.date);
             return {
               id: sale.id,
@@ -116,7 +139,7 @@ export async function GET(req: NextRequest) {
         _sum: { amount: true },
       });
       // Return as array of { employeeId, totalSales }
-      return NextResponse.json({ totals: grouped.map(g => ({ employeeId: g.employeeId, totalSales: g._sum.amount || 0 })) });
+      return NextResponse.json({ totals: grouped.map((g: any) => ({ employeeId: g.employeeId, totalSales: g._sum.amount || 0 })) });
     }
     const year = searchParams.get('year') ? parseInt(searchParams.get('year')!) : new Date().getFullYear();
     const month = searchParams.get('month') ? parseInt(searchParams.get('month')!) : undefined;
@@ -145,15 +168,37 @@ export async function GET(req: NextRequest) {
 
     // Fetch all products for mapping
     const products = await prisma.product.findMany();
-    const productMap = Object.fromEntries(products.map(p => [p.id, p.name]));
+    const productMap = Object.fromEntries(products.map((p: any) => [p.id, p.name]));
 
     // Fetch sales
     const sales = await prisma.sale.findMany({
       where,
       select: {
-        productId: true,
-        amount: true,
+        id: true,
         date: true,
+        amount: true,
+        quantity: true,
+        notes: true,
+        productId: true,
+        product: {
+          select: {
+            name: true,
+            price: true,
+            description: true,
+          }
+        },
+        employeeId: true,
+        employee: {
+          select: {
+            city: true,
+            user: {
+              select: {
+                name: true,
+                email: true,
+              }
+            }
+          }
+        }
       },
       orderBy: { date: "asc" },
     });
@@ -161,11 +206,11 @@ export async function GET(req: NextRequest) {
     // Group sales by product and by month/year
     const grouped: Record<string, Record<string, number>> = {};
     // Initialize all products with zero sales
-    products.forEach(p => {
+    products.forEach((p: any) => {
       grouped[p.name] = {};
     });
     
-    sales.forEach(sale => {
+    sales.forEach((sale: any) => {
       const product = productMap[sale.productId] || 'Unknown';
       const saleDate = new Date(sale.date);
       const y = saleDate.getFullYear();

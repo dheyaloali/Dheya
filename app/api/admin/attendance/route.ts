@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { requireAuth } from "@/lib/auth-guard";
 import { prisma } from "@/lib/prisma";
 import { notifyUserOrEmployee } from "@/lib/notifications";
-
-const prismaClient = new PrismaClient();
 
 export async function GET(req: NextRequest) {
   const auth = await requireAuth(req, true); // Admin only
@@ -31,11 +28,14 @@ export async function GET(req: NextRequest) {
     // Build where clause
     let where: any = {};
     if (search) {
-      where.OR = [
-        { employee: { user: { name: { contains: search } } } },
-        { employeeId: { equals: Number(search) || undefined } },
-        { id: { equals: Number(search) || undefined } },
+      const or: any[] = [
+        { employee: { user: { name: { contains: search } } } }
       ];
+      if (!isNaN(Number(search)) && search.trim() !== "") {
+        or.push({ employeeId: { equals: Number(search) } });
+        or.push({ id: { equals: Number(search) } });
+      }
+      where.OR = or;
     }
     if (status && status.length > 0) {
       where.status = { in: status };
@@ -68,14 +68,15 @@ export async function GET(req: NextRequest) {
       where.employeeId = Number(employeeId);
     }
     if (city && city !== "All") {
-      where.employee = { ...(where.employee || {}), city: city };
+      if (!where.employee) where.employee = {};
+      where.employee.city = city;
     }
     // Get total count (filtered)
-    const total = await prismaClient.attendance.count({
+    const total = await prisma.attendance.count({
       where
     });
     // Get paginated records (filtered)
-    const records = await prismaClient.attendance.findMany({
+    const records = await prisma.attendance.findMany({
       where,
       orderBy: { date: "desc" },
       skip,
@@ -280,8 +281,6 @@ export async function DELETE(req: NextRequest) {
           actionLabel: "View Employees",
           broadcastToAdmin: true,
         });
-        
-        console.log(`[Attendance] Notifications sent for deleted record ID: ${id}`);
       } catch (error) {
         console.error(`[Attendance] Failed to send notification for deleted record ID: ${id}`, error);
       }
@@ -289,7 +288,6 @@ export async function DELETE(req: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error(`[Attendance] Delete error:`, error);
     return NextResponse.json({ error: "Failed to delete attendance record" }, { status: 500 });
   }
 } 

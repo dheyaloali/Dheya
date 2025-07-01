@@ -1,9 +1,12 @@
 import 'dotenv/config';
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, AttendanceStatus, DocumentType } from '@prisma/client'
 import bcrypt from 'bcrypt'
 import speakeasy from 'speakeasy'
-import { reverseGeocode } from '@/lib/server-geocode';
+import { reverseGeocode } from '../lib/server-geocode.js';
 import cliProgress from 'cli-progress';
+
+// No need for module declaration as we're not using TypeScript strict mode
+// and the module is only used for progress display
 
 const prisma = new PrismaClient()
 
@@ -121,17 +124,21 @@ async function seedSampleData() {
       const position = POSITIONS[i % POSITIONS.length];
       
       try {
-    const user = await prisma.user.create({
-    data: {
-            name: `${firstName} ${lastName}`,
+        // Make names unique by adding a timestamp and random string
+        const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        const uniqueName = `${firstName} ${lastName} ${uniqueSuffix}`;
+        
+        const user = await prisma.user.create({
+          data: {
+            name: uniqueName,
             email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}.${i}@example.com`,
             password: await bcrypt.hash('password123', 10),
             role: 'employee',
-      status: 'active',
+            status: 'active',
             isApproved: true,
             phoneNumber: `+62${Math.floor(Math.random() * 9000000000) + 1000000000}`, // Generate random Indonesian phone number
-      employee: {
-        create: {
+            employee: {
+              create: {
                 position,
                 city,
                 joinDate: new Date(Date.now() - Math.floor(Math.random() * 365) * 24 * 60 * 60 * 1000),
@@ -160,14 +167,14 @@ async function seedSampleData() {
         date.setDate(date.getDate() - i);
         date.setHours(0, 0, 0, 0); // Ensure midnight
 
-        // Randomize status
-        const statuses = ["Present", "Late", "Absent"];
+        // Use valid AttendanceStatus enum values
+        const statuses: AttendanceStatus[] = [AttendanceStatus.Present, AttendanceStatus.Late, AttendanceStatus.Absent];
         const status = statuses[Math.floor(Math.random() * statuses.length)];
 
         // Only set checkIn/checkOut if not Absent
         let checkIn = null;
         let checkOut = null;
-        if (status !== "Absent") {
+        if (status !== AttendanceStatus.Absent) {
           checkIn = new Date(date);
           checkIn.setHours(8 + Math.floor(Math.random() * 2), Math.floor(Math.random() * 60), 0, 0);
           checkOut = new Date(date);
@@ -181,7 +188,7 @@ async function seedSampleData() {
             checkIn,
             checkOut,
             status,
-            notes: status === "Absent" ? "Sick leave" : "",
+            notes: status === AttendanceStatus.Absent ? "Sick leave" : "",
           }
         });
       }
@@ -199,7 +206,7 @@ async function seedSampleData() {
         
         for (let i = 0; i < numProducts; i++) {
           await prisma.employeeProduct.create({
-    data: {
+            data: {
               employeeId: user.employee.id,
               productId: shuffledProducts[i].id,
               quantity: 1 + Math.floor(Math.random() * 5)
@@ -224,15 +231,15 @@ async function seedSampleData() {
           
           // Random product and quantity
           const product = products[Math.floor(Math.random() * products.length)];
-        const quantity = 1 + Math.floor(Math.random() * 5);
+          const quantity = 1 + Math.floor(Math.random() * 5);
           const amount = product.price * quantity;
 
           await prisma.salesRecord.create({
-    data: {
+            data: {
               date,
               amount,
               quantity,
-      productId: product.id,
+              productId: product.id,
               employeeId: user.employee.id
             }
           });
@@ -258,7 +265,7 @@ async function seedSampleData() {
           const undertimeHours = Math.random() > 0.9 ? Math.floor(Math.random() * 2) : 0;
 
           await prisma.timeLog.create({
-      data: {
+            data: {
               date,
               hours,
               overtimeHours,
@@ -275,7 +282,11 @@ async function seedSampleData() {
     console.log('Created sample time logs');
 
     // Create sample documents for employees
-    const documentTypes = ["ID Document", "Contract", "Certificate", "Report", "Performance Review"];
+    // Use valid DocumentType enum values from the schema
+    const documentTypes: DocumentType[] = [
+      DocumentType.passport,
+      DocumentType.national_id
+    ];
     const documentStatuses = ["Pending", "Approved", "Rejected"];
     
     for (const user of employees) {
@@ -289,13 +300,13 @@ async function seedSampleData() {
           docDate.setDate(docDate.getDate() - (typeIndex * 5));
           
           await prisma.document.create({
-      data: {
+            data: {
               employeeId: user.employee.id,
-              type: "passport",
-              title: `${user.name}'s ${type}`,
-              description: `Sample ${type.toLowerCase()} for ${user.name}`,
+              type: type,
+              title: `${user.name}'s ${String(type)}`,
+              description: `Sample ${String(type)} for ${user.name}`,
               fileUrl: "https://example.com/documents/sample.pdf",
-        status,
+              status,
               isRegistrationDocument: typeIndex === 0,
               uploadedDuring: "registration"
             }
@@ -341,7 +352,11 @@ async function seedSampleData() {
     console.log('Created sample reports');
 
     // Create EmployeeLocation records for each employee (for real-time map testing)
-    const totalLocations = employees.length * 10;
+    console.log('Creating sample employee location history...');
+    
+    // Limit to fewer locations to avoid rate limiting and database errors
+    const locationsPerEmployee = 2;
+    const totalLocations = employees.length * locationsPerEmployee;
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(totalLocations, 0);
 
@@ -354,29 +369,38 @@ async function seedSampleData() {
       if (user.employee.city === 'Bandung') { baseLat = -6.917; baseLng = 107.619; }
       if (user.employee.city === 'Medan') { baseLat = 3.595; baseLng = 98.672; }
       if (user.employee.city === 'Semarang') { baseLat = -6.966; baseLng = 110.417; }
-      // Simulate 10 locations over the last 5 days
-      for (let i = 0; i < 10; i++) {
-        const timestamp = new Date();
-        timestamp.setDate(timestamp.getDate() - Math.floor(i / 2)); // 2 points per day
-        timestamp.setHours(8 + (i % 5) * 2, Math.floor(Math.random() * 60), 0, 0);
-        const latitude = baseLat + (Math.random() - 0.5) * 0.1 + i * 0.01;
-        const longitude = baseLng + (Math.random() - 0.5) * 0.1 + i * 0.01;
-        process.stdout.write(`Seeding location ${i + 1}/10 for ${user.employee.id}... `);
-        const address = await reverseGeocode(latitude, longitude);
-        await prisma.employeeLocation.create({
-          data: {
-            employeeId: user.employee.id,
-            latitude,
-            longitude,
-            batteryLevel: 50 + Math.floor(Math.random() * 50),
-            timestamp,
-            isMoving: Math.random() > 0.5,
-            address,
-          }
-        });
-        locCount++;
-        bar.update(locCount);
-        process.stdout.write('done\n');
+      
+      // Simulate fewer locations to avoid rate limiting
+      for (let i = 0; i < locationsPerEmployee; i++) {
+        try {
+          const timestamp = new Date();
+          timestamp.setDate(timestamp.getDate() - i); // 1 point per day
+          timestamp.setHours(8 + (i % 5) * 2, Math.floor(Math.random() * 60), 0, 0);
+          
+          // Add small random variation to avoid exact same coordinates
+          const randomOffset = () => (Math.random() - 0.5) * 0.01;
+          const latitude = baseLat + randomOffset();
+          const longitude = baseLng + randomOffset();
+          
+          // Skip geocoding to avoid rate limiting, use static address
+          const address = `Sample address in ${user.employee.city}`;
+          
+          await prisma.employeeLocation.create({
+            data: {
+              employeeId: user.employee.id,
+              latitude,
+              longitude,
+              batteryLevel: 50 + Math.floor(Math.random() * 50),
+              timestamp,
+              isMoving: Math.random() > 0.5,
+              address,
+            }
+          });
+          locCount++;
+          bar.update(locCount);
+        } catch (locError) {
+          console.error(`Error creating location for employee ${user.employee.id}:`, locError);
+        }
       }
     }
     bar.stop();
@@ -386,25 +410,29 @@ async function seedSampleData() {
     const allProducts = await prisma.product.findMany();
     for (const emp of employees) {
       for (let i = 0; i < 7; i++) {
-        const saleDate = new Date();
-        saleDate.setDate(saleDate.getDate() - i);
-        saleDate.setHours(10 + Math.floor(Math.random() * 6), Math.floor(Math.random() * 60), 0, 0); // Random time in workday
-        // Pick a random product
-        const product = allProducts[Math.floor(Math.random() * allProducts.length)];
-        if (!product) continue;
-        const quantity = Math.floor(Math.random() * 5) + 1;
-        const amount = product.price * quantity;
-        if (!emp.employee || typeof emp.employee.id !== 'number') continue;
-        await prisma.sale.create({
-          data: {
-            employeeId: emp.employee.id,
-            productId: product.id,
-            date: saleDate,
-            quantity,
-            amount,
-            notes: '',
-          },
-        });
+        try {
+          const saleDate = new Date();
+          saleDate.setDate(saleDate.getDate() - i);
+          saleDate.setHours(10 + Math.floor(Math.random() * 6), Math.floor(Math.random() * 60), 0, 0); // Random time in workday
+          // Pick a random product
+          const product = allProducts[Math.floor(Math.random() * allProducts.length)];
+          if (!product) continue;
+          const quantity = Math.floor(Math.random() * 5) + 1;
+          const amount = product.price * quantity;
+          if (!emp.employee || typeof emp.employee.id !== 'number') continue;
+          await prisma.sale.create({
+            data: {
+              employeeId: emp.employee.id,
+              productId: product.id,
+              date: saleDate,
+              quantity,
+              amount,
+              notes: '',
+            },
+          });
+        } catch (saleError) {
+          console.error(`Error creating sale record:`, saleError);
+        }
       }
     }
 
